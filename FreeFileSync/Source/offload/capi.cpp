@@ -24,7 +24,7 @@ using namespace zen;
 
 namespace
 {
-const char* const kEngineVersion = "0.2.0";
+const char* const kEngineVersion = "0.5.0";
 
 std::string nowStamp()
 {

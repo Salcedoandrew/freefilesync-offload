@@ -44,7 +44,7 @@ void waitWhilePaused(const Options& opts)
     }
 }
 
-const char* const kToolVersion = "0.1.0";
+const char* const kToolVersion = "0.5.0";
 
 //One destination's progress state. Owned by that destination's worker thread, so
 //nothing here is shared and nothing needs a lock.
