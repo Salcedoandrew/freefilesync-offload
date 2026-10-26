@@ -12,6 +12,22 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.10.2 — 2026-10-26
+
+**About Offload says what the app is, and who made it.**
+
+### Added
+- The About panel was the stock one, so it said "Offload" and a version number and
+  stopped there. It now carries the author, a link to heartfeltmedia.co, the sentence
+  the README leads with — copies to every destination at once, hashes every byte, reads
+  each copy back, leaves a report you can check a year later — and a copyright line.
+
+### Notes
+- The colours are the system label and link colours, so the panel reads correctly if it
+  is ever shown in light mode; the window itself stays dark.
+
+---
+
 ## 0.10.1 — 2026-10-26
 
 **The reports stop naming a version that is three releases old.**
