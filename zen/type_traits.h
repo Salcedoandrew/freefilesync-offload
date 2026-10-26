@@ -1,0 +1,187 @@
+// *****************************************************************************
+// * This file is part of the FreeFileSync project. It is distributed under    *
+// * GNU General Public License: https://www.gnu.org/licenses/gpl-3.0          *
+// * Copyright (C) Zenju (zenju AT freefilesync DOT org) - All Rights Reserved *
+// *****************************************************************************
+#pragma once
+
+#include <span>
+#include <algorithm>
+#include <type_traits>
+
+//https://en.cppreference.com/w/cpp/header/type_traits
+
+namespace zen
+{
+template <class T, class...>
+struct GetFirstOf
+{
+    using Type = T;
+};
+template <class... T> using GetFirstOfT = typename GetFirstOf<T...>::Type;
+
+#if 0 //nicer, but fails with: "'T': pack expansions cannot be used as arguments to non-packed parameters in alias templates"
+    template <class T, class...>
+    using GetFirstOfT = T;
+#endif
+
+template <class>
+struct FunctionReturnType;
+
+template <class R, class... Args>
+struct FunctionReturnType<R(*)(Args...)>
+{
+    using Type = R;
+};
+
+template <class F> using FunctionReturnTypeT = typename FunctionReturnType<F>::Type;
+//yes, there's std::invoke_result_t, but it requires to specify function argument types for no good reason
+
+//=============================================================================
+
+template <class T, size_t N>
+constexpr uint32_t arrayHash(T (&arr)[N]) //don't bother making FNV1aHash constexpr instead
+{
+    uint32_t hashVal = 2166136261U; //FNV-1a base
+
+    for (const T n : std::span(arr, N))
+    {
+        //static_assert(isInteger<T> || std::is_same_v<T, char> || std::is_same_v<T, wchar_t>);
+        static_assert(sizeof(T) <= sizeof(hashVal));
+        hashVal ^= static_cast<uint32_t>(n);
+        hashVal *= 16777619U; //prime
+    }
+    return hashVal;
+}
+
+
+//Herb Sutter's signedness conversion helpers: https://herbsutter.com/2013/06/13/gotw-93-solution-auto-variables-part-2/
+template <class T> inline auto makeSigned  (T t) { return static_cast<std::make_signed_t  <T>>(t); }
+template <class T> inline auto makeUnsigned(T t) { return static_cast<std::make_unsigned_t<T>>(t); }
+
+//################# Built-in Types  ########################
+//unfortunate standardized nonsense: std::is_integral<> includes bool, char, wchar_t! => roll our own:
+template <class T> constexpr bool isUnsignedInt = std::is_same_v<std::remove_cv_t<T>, unsigned char>      ||
+                                                  std::is_same_v<std::remove_cv_t<T>, unsigned short int> ||
+                                                  std::is_same_v<std::remove_cv_t<T>, unsigned int>       ||
+                                                  std::is_same_v<std::remove_cv_t<T>, unsigned long int>  ||
+                                                  std::is_same_v<std::remove_cv_t<T>, unsigned long long int>;
+
+template <class T> constexpr bool isSignedInt = std::is_same_v<std::remove_cv_t<T>, signed char> ||
+                                                std::is_same_v<std::remove_cv_t<T>, short int>   ||
+                                                std::is_same_v<std::remove_cv_t<T>, int>         ||
+                                                std::is_same_v<std::remove_cv_t<T>, long int>    ||
+                                                std::is_same_v<std::remove_cv_t<T>, long long int>;
+
+template <class T> constexpr bool isInteger    = isUnsignedInt<T> || isSignedInt<T>;
+template <class T> constexpr bool isFloat      = std::is_floating_point_v<T>;
+template <class T> constexpr bool isArithmetic = isInteger<T> || isFloat<T>;
+
+//################# Class Members ########################
+
+/*  Detect data or function members of a class by name: ZEN_INIT_DETECT_MEMBER + hasMember_
+    Example: 1. ZEN_INIT_DETECT_MEMBER(c_str);
+             2. hasMember_c_str<T>    -> use boolean
+
+
+    Detect data or function members of a class by name *and* type: ZEN_INIT_DETECT_MEMBER2 + HasMember_
+
+    Example: 1. ZEN_INIT_DETECT_MEMBER2(size, size_t (T::*)() const);
+             2. hasMember_size<T>::value    -> use as boolean
+
+
+    Detect member type of a class: ZEN_INIT_DETECT_MEMBER_TYPE + hasMemberType_
+
+    Example: 1. ZEN_INIT_DETECT_MEMBER_TYPE(value_type);
+             2. hasMemberType_value_type<T>    -> use as boolean                       */
+
+//########## Sorting ##############################
+enum class SortDirection
+{
+    ascending,
+    descending,
+};
+
+template <SortDirection dir, class Predicate, class Arg> inline
+bool isLessFor(Predicate&& pred, const Arg& lhs, const Arg& rhs)
+{
+    if constexpr (dir == SortDirection::ascending)
+        return std::forward<Predicate>(pred)(lhs, rhs);
+    else
+        return std::forward<Predicate>(pred)(rhs, lhs);
+}
+
+
+
+
+
+
+
+//################ implementation ######################
+#define ZEN_INIT_DETECT_MEMBER(NAME)   \
+    \
+    template <bool isClass, class T>   \
+    struct HasMemberImpl_##NAME        \
+    {                                  \
+    private:                           \
+        template <typename U, U t>     \
+        class Helper {};               \
+        \
+        struct Fallback { int NAME; }; \
+        \
+        template <class U>             \
+        struct Helper2 : public U, public Fallback {};  /*this works only for class types!!!*/ \
+        \
+        template <class U> static std::false_type hasMember(Helper<int Fallback::*, &Helper2<U>::NAME>*); \
+        template <class U> static std::true_type  hasMember(...);                                         \
+    public:                                                                   \
+        static constexpr bool value = decltype(hasMember<T>(nullptr))::value; \
+    };                                                                        \
+    \
+    template <class T>                                                        \
+    struct HasMemberImpl_##NAME<false, T> : std::false_type {};               \
+    \
+    template <class T>                                                        \
+    constexpr bool hasMember_##NAME = HasMemberImpl_##NAME<std::is_class_v<T>, T>::value;
+
+#if 0 //alternative, but doesn't handle overloaded functions e.g. std::string::append
+#define ZEN_INIT_DETECT_MEMBER(NAME)                                                     \
+    template <typename T, typename = void>                                               \
+    struct HasMemberImpl_##NAME : std::false_type {};                                    \
+    \
+    template <typename T>                                                                \
+    struct HasMemberImpl_##NAME<T, std::void_t<decltype(&T::NAME)>> : std::true_type {}; \
+    \
+    template <class T>                                                                   \
+    constexpr bool hasMember_##NAME = HasMemberImpl_##NAME<T>::value;
+#endif
+
+//####################################################################
+
+#define ZEN_INIT_DETECT_MEMBER2(NAME, TYPE)           \
+    template <typename T, typename = void>            \
+    struct HasMemberImpl_##NAME : std::false_type {}; \
+    \
+    template <typename T>                             \
+    struct HasMemberImpl_##NAME<T, std::void_t<decltype(static_cast<TYPE>(&T::NAME))>> : std::true_type {}; \
+    \
+    template <class T>                                \
+    constexpr bool hasMember_##NAME = HasMemberImpl_##NAME<T>::value;
+
+//####################################################################
+
+#define ZEN_INIT_DETECT_MEMBER_TYPE(TYPENAME)                 \
+    template <typename T, typename = void>                    \
+    struct HasMemberTypeImpl_##TYPENAME : std::false_type {}; \
+    \
+    template <typename T>                                     \
+    struct HasMemberTypeImpl_##TYPENAME<T, std::void_t<typename T::TYPENAME>> : std::true_type {}; \
+    \
+    template <class T>                                        \
+    constexpr bool hasMemberType_##TYPENAME = HasMemberTypeImpl_##TYPENAME<T>::value;
+}
+
+
+//---------------------------------------------------------------------------
+//ZEN macro consistency checks: => place in most-used header!
+

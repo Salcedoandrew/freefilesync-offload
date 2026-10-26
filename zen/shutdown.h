@@ -1,0 +1,22 @@
+// *****************************************************************************
+// * This file is part of the FreeFileSync project. It is distributed under    *
+// * GNU General Public License: https://www.gnu.org/licenses/gpl-3.0          *
+// * Copyright (C) Zenju (zenju AT freefilesync DOT org) - All Rights Reserved *
+// *****************************************************************************
+#pragma once
+
+#include <functional>
+#include "stl_tools.h"
+//#include "file_error.h" //don't drag in extra_log.h/thread.h dependency
+
+namespace zen
+{
+void shutdownSystem(); //throw FileError
+void suspendSystem();  //
+[[noreturn]] void terminateProcess(int exitCode);
+
+void onSystemShutdownRegister(const SharedRef<std::function<void()>>& task /*noexcept*/); //save important/user data!
+void onSystemShutdownRegister(      SharedRef<std::function<void()>>&& task) = delete; //no temporaries! shared_ptr should manage life time!
+void onSystemShutdownRunTasks(); //call at appropriate time, e.g. when receiving wxEVT_QUERY_END_SESSION/wxEVT_END_SESSION
+//+ also called by shutdownSystem()
+}
