@@ -223,12 +223,13 @@ presets, HTML report and a proper app icon (the last two leftover from Phase 3),
 S3/SFTP destinations — the `afs` layer would give SFTP nearly free, but it is not a
 wedding-card problem.
 
-**18. About box: show who made it.** The About Offload menu item already opens the
-standard panel (`orderFrontStandardAboutPanel`); it just has nothing of Andrew's in
-it yet. Fill it via `NSHumanReadableCopyright` in Info.plist plus a `Credits.rtf`
-in the bundle: Andrew Salcedo / Andrew Salcedo Photography / Heartfelt Media,
-heartfeltmedia.co, booking link, and gcastroandrew@gmail.com. Small: a plist key, a
-text file, and a line in the Makefile so the bundle step copies it into Resources.
+**18. About box: show who made it.** Done in 0.10.2 and 0.10.3. The About Offload
+menu item opens the standard panel (`orderFrontStandardAboutPanel`) with credits
+built in code (`Entry.swift: showAbout`): Andrew Salcedo, heartfeltmedia.co,
+gcastroandrew@gmail.com, and the README's one-liner; the copyright line underneath
+comes from `NSHumanReadableCopyright` in Info.plist. The credits are passed as an
+option, so a `Credits.rtf` in the bundle would be ignored — there is deliberately
+not one.
 
 ### Correction — main moved past this audit
 

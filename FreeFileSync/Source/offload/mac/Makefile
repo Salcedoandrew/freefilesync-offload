@@ -40,15 +40,13 @@ Offload: $(SOURCES) bridge.h $(ENGINE_LIB)
 # The icon is AppIcon.icns in Contents/Resources, named by CFBundleIconFile
 # in Info.plist. The .icns is built from Assets.xcassets/AppIcon.appiconset/
 # with make-icns.py and committed, because the bundle is assembled by hand
-# here rather than by Xcode. Credits.rtf is shown by the standard About panel
-# (orderFrontStandardAboutPanel) when it sits in Contents/Resources.
-Offload.app: Offload Info.plist AppIcon.icns Credits.rtf
+# here rather than by Xcode.
+Offload.app: Offload Info.plist AppIcon.icns
 	rm -rf $@
 	mkdir -p $@/Contents/MacOS $@/Contents/Resources
 	cp Offload $@/Contents/MacOS/Offload
 	cp Info.plist $@/Contents/Info.plist
 	cp AppIcon.icns $@/Contents/Resources/
-	cp Credits.rtf $@/Contents/Resources/
 	cp ../capi.h $@/Contents/Resources/ 2>/dev/null || true
 	codesign --force --sign - $@ 2>/dev/null || echo "codesign skipped"
 

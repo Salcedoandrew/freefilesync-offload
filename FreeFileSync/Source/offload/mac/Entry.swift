@@ -426,8 +426,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate
 
     ///The stock panel says the name and the version and nothing else, which is not
     ///much to show someone who just asked what this thing is. The credits carry who
-    ///made it and the sentence the README leads with; the copyright line underneath
-    ///comes from NSHumanReadableCopyright in Info.plist.
+    ///made it, the website and the email, and the sentence the README leads with;
+    ///the copyright line underneath comes from NSHumanReadableCopyright in Info.plist.
     @MainActor @objc func showAbout(_ sender: Any?)
     {
         let centred = NSMutableParagraphStyle()
@@ -442,10 +442,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate
                          .paragraphStyle: centred]))
 
         credits.append(NSAttributedString(
-            string: "heartfeltmedia.co\n\n",
+            string: "heartfeltmedia.co\n",
             attributes: [.font: NSFont.systemFont(ofSize: 11),
                          .foregroundColor: NSColor.linkColor,
                          .link: URL(string: "https://heartfeltmedia.co")!,
+                         .paragraphStyle: centred]))
+
+        credits.append(NSAttributedString(
+            string: "gcastroandrew@gmail.com\n\n",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.linkColor,
+                         .link: URL(string: "mailto:gcastroandrew@gmail.com")!,
                          .paragraphStyle: centred]))
 
         credits.append(NSAttributedString(
