@@ -47,7 +47,8 @@ void waitWhilePaused(const Options& opts)
     }
 }
 
-const char* const kToolVersion = "0.7.0";
+//From the build, which reads it out of the bundle's Info.plist: see engine.h.
+const char* const kToolVersion = OFFLOAD_VERSION;
 
 //One destination's progress state. Owned by that destination's worker thread, so
 //nothing here is shared and nothing needs a lock.

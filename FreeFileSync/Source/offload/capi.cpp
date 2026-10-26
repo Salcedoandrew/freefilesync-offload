@@ -24,7 +24,8 @@ using namespace zen;
 
 namespace
 {
-const char* const kEngineVersion = "0.7.0";
+//From the build, which reads it out of the bundle's Info.plist: see engine.h.
+const char* const kEngineVersion = OFFLOAD_VERSION;
 
 std::string nowStamp()
 {

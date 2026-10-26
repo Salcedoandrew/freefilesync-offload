@@ -205,6 +205,7 @@ once, so throughput is bounded by the slowest destination, not by the source.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.10.1](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.10.1) | 2026-10-26 | Reports name the version they were written by: the engine's version comes from the bundle now, not a constant that had gone three releases stale |
 | [v0.10.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.10.0) | 2026-10-26 | Skip patterns leave the proxies and card junk behind; a Subfolder field with `%Date%` macros; a fuller `--json` summary; an app icon |
 | [v0.9.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.9.0) | 2026-10-26 | Clear Finished in the Transfers header; failed rows stay behind to be read |
 | [v0.8.1](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.8.1) | 2026-10-26 | Documentation only: the release table caught up, and the changelog and table dates now agree |

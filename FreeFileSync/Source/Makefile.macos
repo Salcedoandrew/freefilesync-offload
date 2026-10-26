@@ -23,7 +23,18 @@ AR  := /usr/bin/ar
 
 BREW_LLVM := $(shell brew --prefix llvm)
 
+# The version the engine reports in every report and MHL. Read from the same
+# Info.plist the release workflow treats as the single source of truth, so the
+# version bump that cuts a release is the only place a version is written. A
+# hand-typed constant in the engine drifted three releases behind before this.
+OFFLOAD_VERSION := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+                     offload/mac/Info.plist 2>/dev/null)
+ifeq ($(strip $(OFFLOAD_VERSION)),)
+OFFLOAD_VERSION := 0.0.0-unknown
+endif
+
 CXXFLAGS += -std=c++23 -pipe -O2 -DNDEBUG -D_LIBCPP_DISABLE_AVAILABILITY \
+            -DOFFLOAD_VERSION='"$(OFFLOAD_VERSION)"' \
             -mmacosx-version-min=12.0 -DWXINTL_NO_GETTEXT_MACRO \
             -I. -I../.. -I../../zenXml \
             -include zen/mac_compat.h -include zen/i18n.h \

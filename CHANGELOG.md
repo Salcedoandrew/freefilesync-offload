@@ -12,6 +12,28 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.10.1 — 2026-10-26
+
+**The reports stop naming a version that is three releases old.**
+
+### Fixed
+- `report.json`, `report.csv` and the MHL each carry the engine's version, and the
+  engine had `0.7.0` typed into it as a constant. Every report this fork has written
+  since 0.7.0 therefore named the wrong version — the kind of thing nobody notices
+  until they open one a year later and try to match it to a release. The version now
+  comes from the build, read out of the bundle's `Info.plist`, which is already the
+  single source of truth the release workflow reads. One version bump, one place, and
+  no constant left to remember.
+
+### Notes
+- The MHL `<version>` element and the JSON `"tool": "ffsoffload <version>"` field
+  both change with this release. Anything keyed on the old string now sees the real
+  version instead of a fossil.
+- A build that cannot read the plist stamps `0.0.0-unknown` rather than inventing a
+  plausible-looking version.
+
+---
+
 ## 0.10.0 — 2026-10-26
 
 **A card can be copied without its proxies, and filed where you will look for it.**

@@ -14,6 +14,16 @@
 #include <atomic>
 #include <functional>
 
+//The version this engine reports in every report and MHL. It is supplied by the
+//build from the bundle's Info.plist, so a report cannot claim a version the app
+//that wrote it does not have: a hand-typed constant here sat three releases
+//behind the bundle before it was a define. The fallback covers a build that
+//bypasses the Makefile, and is deliberately obviously wrong rather than
+//plausibly stale.
+#ifndef OFFLOAD_VERSION
+#define OFFLOAD_VERSION "0.0.0-unknown"
+#endif
+
 namespace offload
 {
 //Live counters for one source -> destination transfer. Emitted from the worker
