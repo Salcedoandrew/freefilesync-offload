@@ -24,7 +24,7 @@ using namespace zen;
 
 namespace
 {
-const char* const kEngineVersion = "0.5.0";
+const char* const kEngineVersion = "0.6.0";
 
 std::string nowStamp()
 {
@@ -70,6 +70,7 @@ struct OffloadJob
     uint64_t verifiedCount = 0;
     uint64_t skippedCount = 0;
     uint64_t failedCount = 0;
+    uint64_t brokenCount = 0;
     uint64_t fileCount = 0;
 
     void publishProgress(const offload::Progress& p)
@@ -230,6 +231,7 @@ extern "C" OffloadJob* offload_job_start(const char* source, const char* dest, c
             job->verifiedCount += d.verified;
             job->skippedCount  += d.skipped;
             job->failedCount   += d.failed + d.mismatched;
+            job->brokenCount   += d.broken;
             job->fileCount     += d.files.size();
         }
     });
@@ -257,6 +259,7 @@ extern "C" void offload_job_poll(OffloadJob* job, OffloadProgress* out)
     out->verifiedCount    = job->verifiedCount;
     out->skippedCount     = job->skippedCount;
     out->failedCount      = job->failedCount;
+    out->brokenCount      = job->brokenCount;
     out->fileCount        = job->fileCount;
     out->ok               = (job->finished && job->haveReport &&
                              offload::allVerified(job->report) &&

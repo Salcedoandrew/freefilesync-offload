@@ -55,6 +55,7 @@ typedef struct
     uint64_t verifiedCount;
     uint64_t skippedCount;
     uint64_t failedCount;    //failed + mismatch
+    uint64_t brokenCount;    //copied anyway, but the source header failed the media check
     uint64_t fileCount;
     double   elapsedSeconds;
 } OffloadProgress;
@@ -94,7 +95,7 @@ int32_t offload_source_measure(const char* source, uint64_t* outBytes, uint64_t*
 //Why the last measure call on this thread failed, UTF-8. "" when it succeeded.
 const char* offload_measure_error(void);
 
-//Engine build stamp ("0.5.0"), for the About box and for support reports.
+//Engine build stamp ("0.6.0"), for the About box and for support reports.
 const char* offload_engine_version(void);
 
 #ifdef __cplusplus

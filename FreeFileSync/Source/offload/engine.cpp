@@ -3,6 +3,8 @@
 // *****************************************************************************
 
 #include "engine.h"
+#include "broken.h"
+#include "cache.h"
 #include "hash.h"
 
 #include <zen/file_access.h>
@@ -44,7 +46,7 @@ void waitWhilePaused(const Options& opts)
     }
 }
 
-const char* const kToolVersion = "0.5.0";
+const char* const kToolVersion = "0.6.0";
 
 //One destination's progress state. Owned by that destination's worker thread, so
 //nothing here is shared and nothing needs a lock.
@@ -101,6 +103,14 @@ bool isTempFileName(const Zstring& itemName)
     return zen::endsWith(itemName, Zstr(".ffs_tmp"));
 }
 
+//The hash cache lives at the destination root, but it is metadata, not data:
+//never copy it, never index it. (It is also skipped on the source side, so a
+//card that somehow carries one does not get it copied along.)
+bool isCacheFileName(const Zstring& itemName)
+{
+    return itemName == kCacheFileName;
+}
+
 //Junk that lives on every camera card and must not be copied or counted.
 bool isCardJunk(const Zstring& itemName)
 {
@@ -119,6 +129,8 @@ struct SourceFile
     Zstring relPath; //uses '/' as separator
     uint64_t size = 0;
     time_t modTime = 0;
+    bool broken = false; //source header failed the media check (see broken.h)
+    std::string brokenReason;
 };
 
 struct DestEntry
@@ -147,6 +159,8 @@ void scanTree(const Zstring& absDir, const Zstring& relDir,
             return;
         if (isTempFileName(fi.itemName))
             return; //a stale publish temp is not a file to copy or index
+        if (isCacheFileName(fi.itemName))
+            return; //the hash cache is metadata, not data
         const Zstring rel = joinRel(relDir, fi.itemName);
         filesOut.push_back({ rel, fi.fileSize, fi.modTime });
         mapOut[rel] = { fi.fileSize, fi.modTime };
@@ -269,14 +283,25 @@ Zstring incrementedName(const std::map<Zstring, DestEntry>& destIndex, const Zst
     return relPath; //give up; the copy will fail loudly rather than overwrite silently
 }
 
-void recordFailure(DestReport& dest, const SourceFile& f, FileState state, const std::string& err)
+//Every record for a source file carries the scan's verdict on it: the copy
+//outcome goes in `state`, the media verdict in `broken`. The two are
+//independent - a broken file is still copied, and a good file can still fail.
+FileRecord baseRecord(const SourceFile& f)
 {
     FileRecord rec;
-    rec.relPath = f.relPath;
-    rec.size    = f.size;
-    rec.modTime = f.modTime;
-    rec.state   = state;
-    rec.error   = err;
+    rec.relPath      = f.relPath;
+    rec.size         = f.size;
+    rec.modTime      = f.modTime;
+    rec.broken       = f.broken;
+    rec.brokenReason = f.brokenReason;
+    return rec;
+}
+
+void recordFailure(DestReport& dest, const SourceFile& f, FileState state, const std::string& err)
+{
+    FileRecord rec = baseRecord(f);
+    rec.state = state;
+    rec.error = err;
     dest.files.push_back(std::move(rec));
 }
 
@@ -328,6 +353,13 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         catch (const FileError&) { /*missing destination folder: nothing present yet*/ }
     }
 
+    //hashes we proved on an earlier run: a matching entry (same path, size,
+    //mtime and algorithm) means the copy on this destination is already
+    //hash-confirmed, so neither --reverify nor Duplicate Detect has to hash
+    //it again. A missing or unreadable cache is just an empty one.
+    HashCache cache;
+    cache.load(appendSeparator(dest.destRoot) + kCacheFileName);
+
     //Plan the work before touching anything, so the progress bar has an honest
     //denominator: files Duplicate Detect will skip contribute no bytes.
     uint64_t plannedBytes = 0;
@@ -372,10 +404,7 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         waitWhilePaused(opts);
         if (opts.cancel && opts.cancel->load())
         {
-            FileRecord rec;
-            rec.relPath = f.relPath;
-            rec.size    = f.size;
-            rec.modTime = f.modTime;
+            FileRecord rec = baseRecord(f);
             rec.state   = FileState::failed;
             rec.error   = "cancelled";
             dest.files.push_back(std::move(rec));
@@ -386,17 +415,17 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         Zstring       dstRel  = f.relPath;
 
         //re-verification hashes what is actually on the destination and must not be
-        //short-circuited by Duplicate Detect (name+size+mtime can't see bit rot)
+        //short-circuited by Duplicate Detect (name+size+mtime can't see bit rot).
+        //The cache short-circuits only the destination side, and only when the
+        //entry still matches the file's size and mtime: the source is always
+        //hashed fresh, because it is the ground truth.
         if (opts.reverifyOnly)
         {
-            FileRecord rec;
-            rec.relPath = f.relPath;
-            rec.size    = f.size;
-            rec.modTime = f.modTime;
+            FileRecord rec = baseRecord(f);
 
             const Zstring reverifyPath = appendSeparator(dest.destRoot) + f.relPath;
             std::string err;
-            Hasher srcHasher(opts.hashAlgo), dstHasher(opts.hashAlgo);
+            Hasher srcHasher(opts.hashAlgo);
             if (!hashFile(srcPath, srcHasher, err, &sink))
             {
                 rec.state = FileState::failed;
@@ -407,17 +436,49 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
                 rec.state = FileState::failed;
                 rec.error = "missing on destination";
             }
-            else if (!hashFile(reverifyPath, dstHasher, err, &sink))
-            {
-                rec.state = FileState::failed;
-                rec.error = "destination: " + err;
-            }
             else
             {
-                rec.hash  = srcHasher.hex();
-                rec.state = srcHasher.hex() == dstHasher.hex() ? FileState::verified : FileState::mismatch;
-                if (rec.state == FileState::mismatch)
-                    rec.error = "hash differs: source " + rec.hash + ", destination " + dstHasher.hex();
+                const DestEntry& de = destIndex[f.relPath];
+                std::string dstHash;
+                bool dstOk = false; //the destination hash is known (cached or just hashed)
+                if (const auto hit = cache.lookup(f.relPath, de.size, de.modTime, opts.hashAlgo))
+                {
+                    dstHash = *hit;
+                    ++dest.cacheHits;
+                    dstOk = true;
+                }
+                else
+                {
+                    Hasher dstHasher(opts.hashAlgo);
+                    if (!hashFile(reverifyPath, dstHasher, err, &sink))
+                    {
+                        rec.state = FileState::failed;
+                        rec.error = "destination: " + err;
+                    }
+                    else
+                    {
+                        dstHash = dstHasher.hex();
+                        ++dest.cacheMisses;
+                        dstOk = true;
+                    }
+                }
+
+                if (dstOk)
+                {
+                    rec.hash  = srcHasher.hex();
+                    if (srcHasher.hex() == dstHash)
+                    {
+                        rec.state = FileState::verified;
+                        //the destination hash is now proven: remember it, so
+                        //the next re-verify does not hash this file again
+                        cache.store(f.relPath, de.size, de.modTime, opts.hashAlgo, dstHash);
+                    }
+                    else
+                    {
+                        rec.state = FileState::mismatch;
+                        rec.error = "hash differs: source " + rec.hash + ", destination " + dstHash;
+                    }
+                }
             }
             dest.files.push_back(std::move(rec));
             if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
@@ -426,11 +487,19 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
 
         if (alreadyPresent(destIndex, f))
         {
-            FileRecord rec;
-            rec.relPath = f.relPath;
-            rec.size    = f.size;
-            rec.modTime = f.modTime;
-            rec.state   = FileState::alreadyPresent;
+            FileRecord rec = baseRecord(f);
+            rec.state = FileState::alreadyPresent;
+            //a cache hit turns "same name+size+mtime" into "hash-confirmed":
+            //the entry was stored when this exact file was verified here
+            const DestEntry& de = destIndex[f.relPath];
+            if (const auto hit = cache.lookup(f.relPath, de.size, de.modTime, opts.hashAlgo))
+            {
+                rec.hash = *hit;
+                rec.hashConfirmed = true;
+                ++dest.cacheHits;
+            }
+            else
+                ++dest.cacheMisses;
             dest.files.push_back(std::move(rec));
             if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
             continue;
@@ -459,10 +528,8 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
 
         if (opts.dryRun)
         {
-            FileRecord rec;
+            FileRecord rec = baseRecord(f);
             rec.relPath = dstRel;
-            rec.size    = f.size;
-            rec.modTime = f.modTime;
             rec.state   = FileState::copied;
             dest.files.push_back(std::move(rec));
             if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
@@ -470,10 +537,8 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         }
 
         //--- copy, then verify -------------------------------------------------
-        FileRecord rec;
-        rec.relPath = dstRel;
-        rec.size    = f.size;
-        rec.modTime = f.modTime;
+        FileRecord rec = baseRecord(f);
+        rec.relPath = dstRel; //an incremented name is where the file actually landed
 
         std::string hash, err;
         if (!copyAndHash(srcPath, dstPath, f.size, f.modTime, opts, sink, hash, err))
@@ -510,8 +575,23 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
             sink.setPhase(Progress::Phase::copying);
         }
 
+        //Only a read-back-verified copy earns a cache entry: the hash is then
+        //proven to be the bytes on this destination, not just the bytes that
+        //were written. (In size-only mode nothing is read back, so nothing is
+        //cached and a later run cannot "confirm" what was never checked.)
+        if (rec.state == FileState::verified)
+            cache.store(dstRel, f.size, f.modTime, opts.hashAlgo, rec.hash);
+
         dest.files.push_back(std::move(rec));
         if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
+    }
+
+    //A dry run touches nothing, so it writes no cache either.
+    if (!opts.dryRun && cache.dirty())
+    {
+        const std::string cacheErr = cache.save(appendSeparator(dest.destRoot) + kCacheFileName);
+        if (!cacheErr.empty())
+            dest.cacheError = cacheErr; //a lost cache only costs re-hashing, never data
     }
 
     sink.setPhase(Progress::Phase::done);
@@ -550,17 +630,20 @@ bool isFailure(FileState state)
 
 void tally(DestReport& dest)
 {
-    dest.copied = dest.skipped = dest.verified = dest.mismatched = dest.failed = 0;
+    dest.copied = dest.skipped = dest.verified = dest.mismatched = dest.failed = dest.broken = 0;
     for (const FileRecord& f : dest.files)
     {
         switch (f.state)
         {
             case FileState::copied:         ++dest.copied;     break;
             case FileState::alreadyPresent: ++dest.skipped;    break;
-            case FileState::verified:       ++dest.verified;   break;
+            //a broken file is copied faithfully, but it is never verified-good
+            case FileState::verified:       if (!f.broken) ++dest.verified; break;
             case FileState::mismatch:       ++dest.mismatched; break;
             case FileState::failed:         ++dest.failed;     break;
         }
+        if (f.broken)
+            ++dest.broken;
         if (f.state == FileState::verified && f.size > 0)
             ; //verified bytes are already counted in bytesCopied when copied
     }
@@ -654,6 +737,20 @@ JobReport runJob(const Options& opts)
         }
     }
     std::sort(source.begin(), source.end(), [](const SourceFile& l, const SourceFile& r) { return l.relPath < r.relPath; });
+
+    //Judge the media headers once, up front, while the scan is still the
+    //phase in progress: every destination shares the same verdict, and the
+    //check reads only file heads, so it stays cheap next to the copy.
+    for (SourceFile& f : source)
+    {
+        const Zstring srcPath = appendSeparator(opts.sourceRoot) + f.relPath;
+        std::string reason;
+        if (checkFileBroken(srcPath, f.size, reason))
+        {
+            f.broken = true;
+            f.brokenReason = reason;
+        }
+    }
 
     job.dests.resize(opts.destRoots.size());
     for (size_t i = 0; i < opts.destRoots.size(); ++i)

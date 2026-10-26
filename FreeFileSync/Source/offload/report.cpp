@@ -125,7 +125,7 @@ std::string writeCsv(const JobReport& job, const Zstring& filePath)
 {
     std::ostringstream out;
     out << "destination,relative_path,size_bytes,modified_epoch,hash_"
-        << getHashTag(job.hashAlgo) << ",state,error\n";
+        << getHashTag(job.hashAlgo) << ",state,error,broken,broken_reason,hash_confirmed\n";
     for (const DestReport& d : job.dests)
         for (const FileRecord& f : d.files)
         {
@@ -135,7 +135,10 @@ std::string writeCsv(const JobReport& job, const Zstring& filePath)
                 << static_cast<long long>(f.modTime) << ','
                 << f.hash << ','
                 << getStateName(f.state) << ','
-                << csvEscape(f.error) << '\n';
+                << csvEscape(f.error) << ','
+                << (f.broken ? "true" : "false") << ','
+                << csvEscape(f.brokenReason) << ','
+                << (f.hashConfirmed ? "true" : "false") << '\n';
         }
     return writeRaw(filePath, out.str());
 }
@@ -164,7 +167,8 @@ std::string writeJson(const JobReport& job, const Zstring& filePath)
         out << "      \"bytes_copied\": " << d.bytesCopied << ",\n";
         out << "      \"counts\": { \"copied\": " << d.copied << ", \"already_present\": " << d.skipped
             << ", \"verified\": " << d.verified << ", \"mismatch\": " << d.mismatched
-            << ", \"failed\": " << d.failed << " },\n";
+            << ", \"failed\": " << d.failed << ", \"broken\": " << d.broken
+            << ", \"cache_hits\": " << d.cacheHits << ", \"cache_misses\": " << d.cacheMisses << " },\n";
         out << "      \"files\": [\n";
         for (size_t k = 0; k < d.files.size(); ++k)
         {
@@ -173,7 +177,11 @@ std::string writeJson(const JobReport& job, const Zstring& filePath)
                 << ", \"size\": " << f.size
                 << ", \"modified\": " << static_cast<long long>(f.modTime)
                 << ", \"hash\": \"" << f.hash << "\""
-                << ", \"state\": \"" << getStateName(f.state) << "\"";
+                << ", \"state\": \"" << getStateName(f.state) << "\""
+                << ", \"broken\": " << (f.broken ? "true" : "false")
+                << ", \"hash_confirmed\": " << (f.hashConfirmed ? "true" : "false");
+            if (f.broken)
+                out << ", \"broken_reason\": \"" << jsonEscape(f.brokenReason) << "\"";
             if (!f.error.empty())
                 out << ", \"error\": \"" << jsonEscape(f.error) << "\"";
             out << " }" << (k + 1 < d.files.size() ? "," : "") << "\n";

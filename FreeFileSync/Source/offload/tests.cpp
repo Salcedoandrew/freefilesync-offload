@@ -8,6 +8,8 @@
 // *****************************************************************************
 
 #include "engine.h"
+#include "broken.h"
+#include "cache.h"
 #include "hash.h"
 #include "report.h"
 
@@ -21,6 +23,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -136,6 +139,28 @@ void testHashing()
 }
 
 //------------------------------------------------------------- scenario setup
+//Minimal valid media headers, so the fixture files pass the broken-file
+//check: a real JPEG starts SOI + APP0, a real CR3 starts with an ftyp box
+//branded "crx ". The filler after the header is the same deterministic
+//pattern the hash tests already pin down.
+std::string validJpeg(size_t total)
+{
+    std::string s;
+    s += static_cast<char>(0xFF);
+    s += static_cast<char>(0xD8);
+    s += static_cast<char>(0xFF);
+    s += static_cast<char>(0xE0); //SOI + APP0
+    s += pattern(total - 4);
+    return s;
+}
+
+std::string validCr3(size_t total)
+{
+    std::string s("\x00\x00\x00\x18" "ftyp" "crx ", 12); //box size + ftyp + brand
+    s += pattern(total - 12);
+    return s;
+}
+
 struct Scratch
 {
     Zstring root;
@@ -150,9 +175,9 @@ struct Scratch
     void buildSource()
     {
         createDirectoryIfMissingRecursion(appendSeparator(source) + Zstr("DCIM/100CANON"));
-        writeText(appendSeparator(source) + Zstr("DCIM/100CANON/IMG_0001.JPG"), pattern(5000));
-        writeText(appendSeparator(source) + Zstr("DCIM/100CANON/IMG_0002.JPG"), pattern(12345));
-        writeText(appendSeparator(source) + Zstr("DCIM/100CANON/IMG_0003.CR3"), pattern(70000));
+        writeText(appendSeparator(source) + Zstr("DCIM/100CANON/IMG_0001.JPG"), validJpeg(5000));
+        writeText(appendSeparator(source) + Zstr("DCIM/100CANON/IMG_0002.JPG"), validJpeg(12345));
+        writeText(appendSeparator(source) + Zstr("DCIM/100CANON/IMG_0003.CR3"), validCr3(70000));
         writeText(appendSeparator(source) + Zstr("clip.mov"),                     pattern(250000));
     }
 
@@ -233,12 +258,20 @@ void testCorruptionDetected()
 
     runJob(makeOptions(s, { destA }));
 
-    //flip bytes inside the copy, leaving name, size and mtime intact - the exact
-    //failure a bad cable or a dying drive produces
+    //flip bytes inside the copy - the exact failure a bad cable or a dying
+    //drive produces. Then move the file's date an hour forward: the cache
+    //trusts size+date, so a content change that keeps both is invisible to
+    //it (see cache.h) - the date has to move for the entry to invalidate and
+    //the file to be re-hashed. A rewrite in the real world moves the date;
+    //the same-second rewrite here would not, so the move is explicit.
     const Zstring victim = appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0002.JPG");
     std::string bytes = readText(victim);
     bytes[100] = static_cast<char>(bytes[100] ^ 0xFF);
     writeText(victim, bytes);
+    const auto then = std::filesystem::last_write_time(
+        std::filesystem::path(zen::utfTo<std::string>(victim)));
+    std::filesystem::last_write_time(
+        std::filesystem::path(zen::utfTo<std::string>(victim)), then + std::chrono::hours(1));
 
     Options o = makeOptions(s, { destA });
     o.reverifyOnly = true;
@@ -618,6 +651,313 @@ void testStaleTemps()
         check(!itemExists(appendSeparator(destB) + Zstr("clip.mov.ffs_tmp")), "the source-side temp is not copied");
     }
 }
+//------------------------------------------------------------ broken headers
+std::string validPng(size_t filler)
+{
+    std::string s;
+    const auto add = [&s](const char* bytes, size_t n) { s.append(bytes, n); };
+    add("\x89PNG\r\n\x1a\n", 8);          //signature
+    add("\x00\x00\x00\x0d", 4);           //IHDR length 13
+    add("IHDR", 4);
+    s.append(13, '\0');                   //IHDR data (width/height/etc.)
+    add("\x00\x00\x00\x00", 4);           //CRC (shape only - the checker does not verify it)
+    s += pattern(filler);
+    add("\x00\x00\x00\x00" "IEND" "\xae\x42\x60\x82", 12); //IEND chunk
+    return s;
+}
+
+std::string validTiff(bool bigEndian)
+{
+    std::string s;
+    if (bigEndian)
+    {
+        s.append("MM\0*", 4);
+        s.append("\x00\x00\x00\x08", 4); //first IFD at offset 8
+    }
+    else
+    {
+        s.append("II*\0", 4);
+        s.append("\x08\x00\x00\x00", 4);
+    }
+    s += pattern(200);
+    return s;
+}
+
+void testBrokenHeaderUnits()
+{
+    std::cout << "broken header units\n";
+    std::string reason;
+    const auto broken = [&](const std::string& ext, const std::string& head,
+                            const std::string& tail, uint64_t size)
+    {
+        reason.clear();
+        return checkMediaHeader(ext, head.data(), head.size(), tail.data(), tail.size(), size, reason);
+    };
+    const std::string iend("\x00\x00\x00\x00" "IEND" "\xae\x42\x60\x82", 12);
+
+    //JPEG: SOI + a marker
+    check(!broken("jpg", validJpeg(100), "", 100), "a valid JPEG is not broken");
+    check(broken("jpg", pattern(100), "", 100) && !reason.empty(), "random bytes as .jpg are broken");
+    check(broken("jpg", std::string("\xff\xd8", 2), "", 2), "a 2-byte JPEG is broken");
+    check(broken("jpeg", std::string("\xff\xd8\xff\x00", 4), "", 4), "SOI followed by padding is broken");
+
+    //PNG: signature + IHDR + IEND
+    check(!broken("png", validPng(100), iend, 45 + 100), "a valid PNG is not broken");
+    check(broken("png", pattern(200), iend, 200) && !reason.empty(), "random bytes as .png are broken");
+    check(broken("png", validPng(100), pattern(12), 45 + 100), "a PNG with a wrong tail is broken");
+    check(broken("png", validPng(100), "", 45 + 100), "a PNG with no IEND is broken");
+    check(broken("png", validPng(0).substr(0, 33), iend, 33), "a PNG too small for IEND is broken");
+
+    //TIFF (and TIFF-based NEF/ARW): byte order, magic 42, IFD offset in range
+    check(!broken("tif", validTiff(false), "", 208), "a valid little-endian TIFF is not broken");
+    check(!broken("tiff", validTiff(true), "", 208), "a valid big-endian TIFF is not broken");
+    check(!broken("nef", validTiff(false), "", 208), "a TIFF-based NEF is judged as TIFF");
+    check(!broken("arw", validTiff(true), "", 208), "a TIFF-based ARW is judged as TIFF");
+    check(broken("tif", pattern(100), "", 100), "random bytes as .tif are broken");
+    check(broken("tif", std::string("II+\0\x08\x00\x00\x00", 8), "", 208), "a TIFF with magic 43 is broken");
+    check(broken("tif", std::string("II*\0\x00\x04\x00\x00", 8), "", 208), "a TIFF with an IFD past the end is broken");
+
+    //CR3: ftyp box branded crx
+    check(!broken("cr3", validCr3(100), "", 100), "a valid CR3 is not broken");
+    check(broken("cr3", pattern(100), "", 100), "random bytes as .cr3 are broken");
+    check(broken("cr3", std::string("\x00\x00\x00\x18" "ftyp" "mp42", 12) + pattern(88), "", 100),
+          "an ftyp box branded mp42 is not a CR3");
+
+    //unknown types are never broken - only formats we can judge get judged
+    check(!broken("mov", pattern(100), "", 100), "a .mov is never flagged");
+    check(!broken("txt", pattern(100), "", 100), "a .txt is never flagged");
+    check(!broken("", pattern(100), "", 100), "a file with no extension is never flagged");
+}
+
+//------------------------------------------------- broken files still copy
+//A broken file is copied faithfully and hash-verified like any other, but it
+//is flagged in the report and never counted as verified-good.
+void testBrokenFiles()
+{
+    std::cout << "broken files\n";
+    Scratch s(Zstr("broken"));
+    createDirectoryIfMissingRecursion(appendSeparator(s.source) + Zstr("DCIM"));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/good.jpg"), validJpeg(5000));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/bad.jpg"),  pattern(5000));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/good.png"), validPng(5000));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/bad.png"),  pattern(5000));
+    const std::string png = validPng(5000);
+    writeText(appendSeparator(s.source) + Zstr("DCIM/cut.png"),  png.substr(0, png.size() - 12)); //no IEND
+    writeText(appendSeparator(s.source) + Zstr("DCIM/good.tif"), validTiff(false));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/bad.tif"),  pattern(5000));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/good.cr3"), validCr3(7000));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/bad.cr3"),
+              std::string("\x00\x00\x00\x18" "ftyp" "mp42", 12) + pattern(6988));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/good.nef"), validTiff(true));
+    writeText(appendSeparator(s.source) + Zstr("DCIM/bad.arw"),  pattern(5000));
+
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    const JobReport job = runJob(makeOptions(s, { destA }));
+    check(allVerified(job), "a run with broken files still verifies (broken is a warning, not a failure)");
+    check(job.dests[0].files.size() == 11, "eleven files enumerated");
+    check(job.dests[0].broken == 6, "six broken files (got " + std::to_string(job.dests[0].broken) + ")");
+    check(job.dests[0].verified == 5, "five verified-good files (got " + std::to_string(job.dests[0].verified) + ")");
+    check(job.dests[0].filesWritten == 11, "all eleven files are still written");
+    check(job.dests[0].failed == 0 && job.dests[0].mismatched == 0, "no failures or mismatches");
+
+    const auto find = [&](const char* name) -> const FileRecord*
+    {
+        for (const FileRecord& f : job.dests[0].files)
+            if (zen::utfTo<std::string>(f.relPath).find(name) != std::string::npos)
+                return &f;
+        return nullptr;
+    };
+
+    for (const char* bad : { "bad.jpg", "bad.png", "cut.png", "bad.tif", "bad.cr3", "bad.arw" })
+    {
+        const FileRecord* rec = find(bad);
+        check(rec != nullptr, std::string("record found for ") + bad);
+        if (!rec)
+            continue;
+        check(rec->broken, std::string(bad) + " is flagged broken");
+        check(!rec->brokenReason.empty(), std::string(bad) + " carries a reason");
+        check(rec->state == FileState::verified, std::string(bad) + " still copies and verifies");
+        check(!rec->hash.empty(), std::string(bad) + " still carries its hash");
+        //faithful copy: the bytes on the destination are the source bytes
+        const std::string srcBytes = readText(appendSeparator(s.source) + Zstr("DCIM/") + bad);
+        check(readText(appendSeparator(destA) + Zstr("DCIM/") + bad) == srcBytes,
+              std::string(bad) + " is copied byte-for-byte");
+        check(rec->hash == hashOf(srcBytes), std::string(bad) + " hash matches the source bytes");
+    }
+    for (const char* good : { "good.jpg", "good.png", "good.tif", "good.cr3", "good.nef" })
+    {
+        const FileRecord* rec = find(good);
+        check(rec != nullptr, std::string("record found for ") + good);
+        if (rec)
+            check(!rec->broken, std::string(good) + " is not flagged");
+    }
+
+    //the report carries the broken count and the per-file flag
+    const Zstring csv  = appendSeparator(s.root) + Zstr("broken.csv");
+    const Zstring json = appendSeparator(s.root) + Zstr("broken.json");
+    check(writeCsv (job, csv ).empty(), "broken csv written");
+    check(writeJson(job, json).empty(), "broken json written");
+    const std::string csvText  = readText(csv);
+    const std::string jsonText = readText(json);
+    check(csvText.find(",broken,") != std::string::npos, "csv header names the broken column");
+    check(csvText.find(",true,") != std::string::npos, "csv marks broken rows");
+    check(jsonText.find("\"broken\": 6") != std::string::npos, "json counts six broken files");
+    check(jsonText.find("\"broken\": true") != std::string::npos, "json flags broken files");
+    check(jsonText.find("broken_reason") != std::string::npos, "json carries the broken reason");
+}
+
+//------------------------------------------------------------ hash cache
+void testHashCache()
+{
+    std::cout << "hash cache\n";
+    //--- the cache file itself: round trip, invalidation, version, garbage
+    {
+        const Zstring cachePath = appendSeparator(getTempFolderPath()) + Zstr("ffsoffload-test-cache-file");
+        try { if (itemExists(cachePath)) removeFilePlain(cachePath); } catch (const FileError&) {}
+
+        HashCache c1;
+        c1.store(Zstr("DCIM/IMG_0001.JPG"), 5000, 1700000000, HashAlgo::xxh64, "abcdef0123456789");
+        c1.store(Zstr("clip.mov"), 250000, 1700000001, HashAlgo::xxh64, "0123456789abcdef");
+        check(c1.save(cachePath).empty(), "cache saves");
+
+        HashCache c2;
+        check(c2.load(cachePath), "cache loads");
+        check(c2.size() == 2, "cache holds both entries");
+        check(c2.lookup(Zstr("DCIM/IMG_0001.JPG"), 5000, 1700000000, HashAlgo::xxh64) ==
+              std::optional<std::string>("abcdef0123456789"), "cache hit returns the stored hash");
+        check(!c2.lookup(Zstr("DCIM/IMG_0001.JPG"), 5001, 1700000000, HashAlgo::xxh64),
+              "a changed size invalidates the entry");
+        check(!c2.lookup(Zstr("DCIM/IMG_0001.JPG"), 5000, 1700000001, HashAlgo::xxh64),
+              "a changed mtime invalidates the entry");
+        check(!c2.lookup(Zstr("DCIM/IMG_0001.JPG"), 5000, 1700000000, HashAlgo::sha1),
+              "a different algorithm invalidates the entry");
+        check(!c2.lookup(Zstr("DCIM/IMG_9999.JPG"), 5000, 1700000000, HashAlgo::xxh64),
+              "an unknown path misses");
+
+        //a wrong-version cache is ignored wholesale, not trusted
+        writeText(cachePath, "ffsoffload-cache 99\nDCIM/IMG_0001.JPG\t5000\t1700000000\txxh64\tabcdef0123456789\n");
+        HashCache c3;
+        check(c3.load(cachePath), "a wrong-version cache still loads");
+        check(c3.empty(), "a wrong-version cache is ignored wholesale");
+        check(!c3.lookup(Zstr("DCIM/IMG_0001.JPG"), 5000, 1700000000, HashAlgo::xxh64),
+              "a wrong-version entry is never trusted");
+
+        //garbage is ignored, and one bad line never poisons the rest
+        writeText(cachePath, "not a cache at all\n");
+        HashCache c4;
+        check(c4.load(cachePath), "garbage loads as an empty cache");
+        check(c4.empty(), "garbage is ignored");
+        writeText(cachePath, "ffsoffload-cache 1\nthis line has no tabs\nclip.mov\t250000\t1700000001\txxh64\t0123456789abcdef\n");
+        HashCache c5;
+        check(c5.load(cachePath), "a cache with one bad line still loads");
+        check(c5.size() == 1, "the bad line is skipped, the good entry survives");
+    }
+
+    //--- engine level: first run populates, later runs confirm from the cache
+    {
+        Scratch s(Zstr("cache"));
+        s.buildSource();
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+
+        const JobReport first = runJob(makeOptions(s, { destA }));
+        check(allVerified(first), "cache first run verifies");
+        check(first.dests[0].cacheHits == 0 && first.dests[0].cacheMisses == 0,
+              "first run has no cache to consult");
+        const Zstring cachePath = appendSeparator(destA) + Zstr(".ffsoffload-cache");
+        check(itemExists(cachePath), "first run writes the cache file");
+        const std::string cacheText = readText(cachePath);
+        check(cacheText.rfind("ffsoffload-cache 1\n", 0) == 0, "cache file carries the version line");
+        check(cacheText.find("clip.mov") != std::string::npos, "cache file lists the copied files");
+
+        const JobReport second = runJob(makeOptions(s, { destA }));
+        check(allVerified(second), "second run verifies");
+        check(second.dests[0].skipped == 4, "second run skips all four");
+        check(second.dests[0].cacheHits == 4, "second run confirms all four from the cache (got " +
+              std::to_string(second.dests[0].cacheHits) + ")");
+        check(second.dests[0].bytesCopied == 0, "second run writes zero bytes");
+        bool allConfirmed = true;
+        for (const FileRecord& f : second.dests[0].files)
+            allConfirmed = allConfirmed && f.hashConfirmed && !f.hash.empty();
+        check(allConfirmed, "every skipped file is hash-confirmed with its digest");
+
+        //re-verify takes the destination hashes from the cache
+        Options o = makeOptions(s, { destA });
+        o.reverifyOnly = true;
+        const JobReport reverify = runJob(o);
+        check(allVerified(reverify), "re-verify verifies");
+        check(reverify.dests[0].verified == 4, "re-verify verifies all four");
+        check(reverify.dests[0].cacheHits == 4, "re-verify takes all four destination hashes from the cache");
+    }
+
+    //--- invalidation by mtime: one moved file re-copies, the rest still hit
+    {
+        Scratch s(Zstr("cache-mtime"));
+        s.buildSource();
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+        runJob(makeOptions(s, { destA }));
+
+        const Zstring victim = appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0001.JPG");
+        const auto then = std::filesystem::last_write_time(
+            std::filesystem::path(zen::utfTo<std::string>(victim)));
+        std::filesystem::last_write_time(
+            std::filesystem::path(zen::utfTo<std::string>(victim)), then + std::chrono::hours(1));
+
+        const JobReport job = runJob(makeOptions(s, { destA }));
+        check(allVerified(job), "mtime run verifies");
+        check(job.dests[0].skipped == 3, "three files still skip after one mtime moved (got " +
+              std::to_string(job.dests[0].skipped) + ")");
+        check(job.dests[0].cacheHits == 3, "three cache hits after one mtime moved (got " +
+              std::to_string(job.dests[0].cacheHits) + ")");
+        check(job.dests[0].filesWritten == 1, "the moved file is re-copied");
+        bool found = false;
+        for (const FileRecord& f : job.dests[0].files)
+            if (zen::utfTo<std::string>(f.relPath).find("IMG_0001-1.JPG") != std::string::npos)
+                found = true;
+        check(found, "the moved file lands as IMG_0001-1.JPG, the original is never overwritten");
+    }
+
+    //--- invalidation by size: one grown file re-copies, the rest still hit
+    {
+        Scratch s(Zstr("cache-size"));
+        s.buildSource();
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+        runJob(makeOptions(s, { destA }));
+
+        writeText(appendSeparator(s.source) + Zstr("DCIM/100CANON/IMG_0002.JPG"), validJpeg(9999));
+
+        const JobReport job = runJob(makeOptions(s, { destA }));
+        check(allVerified(job), "size run verifies");
+        check(job.dests[0].skipped == 3, "three files still skip after one size changed");
+        check(job.dests[0].cacheHits == 3, "three cache hits after one size changed");
+        check(job.dests[0].filesWritten == 1, "the grown file is re-copied");
+    }
+
+    //--- the cache file itself is never copied, on either side
+    {
+        Scratch s(Zstr("cache-excluded"));
+        s.buildSource();
+        writeText(appendSeparator(s.source) + Zstr(".ffsoffload-cache"), "junk planted on the card");
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+        writeText(appendSeparator(destA) + Zstr(".ffsoffload-cache"), "garbage from a crashed run");
+
+        const JobReport job = runJob(makeOptions(s, { destA }));
+        check(allVerified(job), "cache-exclusion run verifies");
+        check(job.dests[0].files.size() == 4, "the card-side cache file is not enumerated (got " +
+              std::to_string(job.dests[0].files.size()) + ")");
+        check(job.dests[0].verified == 4, "all four real files verify");
+        const std::string cacheText = readText(appendSeparator(destA) + Zstr(".ffsoffload-cache"));
+        check(cacheText.rfind("ffsoffload-cache 1\n", 0) == 0,
+              "the garbage destination cache is rebuilt as a real cache");
+        check(cacheText.find("junk planted") == std::string::npos,
+              "the card-side cache content is not copied into the destination cache");
+    }
+}
 
 
 int main()
@@ -638,6 +978,9 @@ int main()
     testScanFailure();
     testTempPublish();
     testStaleTemps();
+    testBrokenHeaderUnits();
+    testBrokenFiles();
+    testHashCache();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
     if (failures > 0)

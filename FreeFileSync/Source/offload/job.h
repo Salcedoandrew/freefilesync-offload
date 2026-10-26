@@ -42,6 +42,13 @@ struct FileRecord
     std::string hash;     //XXH64 hex, big-endian; empty when the file was not hashed
     FileState state = FileState::failed;
     std::string error;    //populated for mismatch/failed
+    //The source file's header failed the media check (see broken.h). The file
+    //was still copied faithfully, but it is never counted as verified-good.
+    bool broken = false;
+    std::string brokenReason; //plain-language cause, empty when not broken
+    //Duplicate Detect skipped this file, and the hash cache confirmed the
+    //copy on the destination matches - not just name+size+mtime.
+    bool hashConfirmed = false;
 };
 
 struct DestReport
@@ -51,9 +58,13 @@ struct DestReport
 
     size_t copied = 0;
     size_t skipped = 0;
-    size_t verified = 0;
+    size_t verified = 0;   //hash-confirmed copies; broken files are never counted here
     size_t mismatched = 0;
     size_t failed = 0;
+    size_t broken = 0;     //files whose source header failed the media check
+    size_t cacheHits = 0;  //destination hashes taken from the cache, not re-hashed
+    size_t cacheMisses = 0; //cache lookups that missed (no entry, or size/mtime/algo moved)
+    std::string cacheError; //non-empty when the hash cache could not be saved
     uint64_t bytesCopied = 0; //bytes this run actually wrote
     size_t filesWritten = 0;   //files this run actually wrote (copied or verified)
 };

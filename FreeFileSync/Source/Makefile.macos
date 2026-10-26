@@ -54,7 +54,7 @@ afsFiles = \
 baseFiles = binary.cpp structures.cpp
 
 offloadFiles = \
-    hash.cpp engine.cpp report.cpp capi.cpp
+    hash.cpp engine.cpp report.cpp capi.cpp broken.cpp cache.cpp
 
 objs = $(addprefix build/zen_,$(zenFiles:.cpp=.o)) \
        $(addprefix build/afs_,$(afsFiles:.cpp=.o)) \

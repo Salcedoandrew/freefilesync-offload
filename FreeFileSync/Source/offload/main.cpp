@@ -249,6 +249,8 @@ int main(int argc, char** argv)
             return;
         std::cout << "  " << destLabel(destRoot) << "  " << getStateName(f.state)
                   << "  " << humanBytes(f.size) << "  " << zen::utfTo<std::string>(f.relPath);
+        if (f.broken)
+            std::cout << "  [BROKEN: " << f.brokenReason << " - copied anyway]";
         if (!f.error.empty())
             std::cout << "  [" << f.error << "]";
         std::cout << "\n";
@@ -271,7 +273,9 @@ int main(int argc, char** argv)
         for (const DestReport& d : job.dests)
             std::cout << ", \"" << destLabel(d.destRoot) << "\": {\"verified\": " << d.verified
                       << ", \"written\": " << d.filesWritten << ", \"skipped\": " << d.skipped
-                      << ", \"mismatch\": " << d.mismatched << ", \"failed\": " << d.failed << "}";
+                      << ", \"mismatch\": " << d.mismatched << ", \"failed\": " << d.failed
+                      << ", \"broken\": " << d.broken
+                      << ", \"cache_hits\": " << d.cacheHits << "}";
         std::cout << "}\n";
     }
     else
@@ -284,13 +288,23 @@ int main(int argc, char** argv)
                       << d.filesWritten << " written, "
                       << d.skipped << " already present, "
                       << d.mismatched << " mismatch, "
-                      << d.failed << " failed  ("
-                      << humanBytes(d.bytesCopied) << " written)\n";
+                      << d.failed << " failed, "
+                      << d.broken << " broken  ("
+                      << humanBytes(d.bytesCopied) << " written, "
+                      << d.cacheHits << " cache hits)\n";
 
             for (const FileRecord& f : d.files)
                 if (isFailure(f.state))
                     std::cout << "  FAIL " << zen::utfTo<std::string>(f.relPath)
                               << "  [" << getStateName(f.state) << "] " << f.error << "\n";
+            //Broken is a warning, not a failure: the file was still copied
+            //faithfully, so the job can pass with broken files in it.
+            for (const FileRecord& f : d.files)
+                if (f.broken)
+                    std::cout << "  WARNING " << zen::utfTo<std::string>(f.relPath)
+                              << " is broken: " << f.brokenReason << " (copied anyway)\n";
+            if (!d.cacheError.empty())
+                std::cout << "  WARNING hash cache could not be saved: " << d.cacheError << "\n";
         }
         //A failed source scan runs no destination, so there are no FAIL lines
         //above at all: print the reason here instead of a bare "FAILED".
