@@ -295,8 +295,12 @@ on screen.
 above was written and reviewed static-only. CI run 12 on `00b7a77` then built all of it:
 engine tests (including the new `testTruncatedReport`), the Swift app, the fit test, the
 update tests and the app self-test — every step green. That covers compilation and the
-engine's behaviour. It does not cover the updater's no-checksum refusal at runtime,
-because the update self-test never performs a real install.
+engine's behaviour, but not the updater's no-checksum refusal: the update self-test
+never performs a real install. So the rule moved out of `performInstall` into
+`UpdateInstaller.checksumAsset(for:)` — one owner for it — and the update self-test now
+exercises both directions: refused when the release publishes no sums asset, accepted
+when it does. What is still untested is a whole install, which needs a network and a
+writable bundle.
 
 ---
 

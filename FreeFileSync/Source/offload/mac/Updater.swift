@@ -328,6 +328,17 @@ enum UpdateInstaller
         guard p.terminationStatus == 0 else { throw UpdateError.signatureRejected }
     }
 
+    ///The checksum the release publishes for the zip it ships. An install has no
+    ///business continuing without one: the app is about to replace itself, and a
+    ///download that nobody can check is exactly what the checksum exists to catch.
+    ///Kept out of performInstall so the rule has one owner and can be tested without
+    ///a network or a real bundle.
+    static func checksumAsset(for release: ReleaseInfo) throws -> ReleaseAsset
+    {
+        guard let sums = release.sums else { throw UpdateError.checksumMissing }
+        return sums
+    }
+
     ///The script that does what a running process cannot do to itself.
     ///`pid` is the app's; `0` skips the wait, which is how the tests drive it.
     static func swapScript() -> String
@@ -540,7 +551,7 @@ final class Updater: ObservableObject
             //verified, and an update that cannot be verified must not replace the
             //installed app — the whole point of the check is that a byte of
             //difference stops here, which it cannot do if the check is optional.
-            guard let sumsAsset = release.sums else { throw UpdateError.checksumMissing }
+            let sumsAsset = try UpdateInstaller.checksumAsset(for: release)
             let (sumsFile, sumsResponse) = try await download(sumsAsset, into: work)
             if let http = sumsResponse as? HTTPURLResponse, http.statusCode != 200
             {

@@ -32,6 +32,7 @@ enum UpdateSelfTest
     {
         versions()
         feed()
+        installGate()
         sums()
         hashing()
         script()
@@ -117,6 +118,53 @@ enum UpdateSelfTest
         if let d = noZip.data(using: .utf8), let f = try? JSONDecoder().decode(FeedRelease.self, from: d)
         {
             expect((try? f.releaseInfo()) == nil, "a release without an Offload zip is refused")
+        }
+    }
+
+    //-- the install gate -------------------------------------------------------
+
+    ///A release that publishes no checksum cannot be verified. The install must be
+    ///refused at the gate, before anything is downloaded and long before the running
+    ///app is moved aside — an update nobody can check is the one thing the checksum
+    ///step exists to stop.
+    private static func installGate()
+    {
+        let noSums = sampleJSON.replacingOccurrences(of: "SHA256SUMS.txt", with: "release-notes.txt")
+        guard let data = noSums.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(FeedRelease.self, from: data),
+              let release = try? decoded.releaseInfo()
+        else { return expect(false, "a release without a sums asset still decodes") }
+
+        expect(release.sums == nil, "a release with no sums asset has no checksum")
+        expect(release.zip.name == "Offload-0.4.1-macos-arm64.zip", "its zip is still found")
+
+        var refused = false
+        var wrongError = ""
+        do
+        {
+            _ = try UpdateInstaller.checksumAsset(for: release)
+        }
+        catch UpdateError.checksumMissing
+        {
+            refused = true
+        }
+        catch
+        {
+            wrongError = "\(error)"
+        }
+        expect(refused, "an install is refused when the release publishes no checksum\(wrongError.isEmpty ? "" : " (got: \(wrongError))"))")
+
+        //the case that must still be accepted: the sample release, with its sums file
+        if let okData = sampleJSON.data(using: .utf8),
+           let okDecoded = try? JSONDecoder().decode(FeedRelease.self, from: okData),
+           let okRelease = try? okDecoded.releaseInfo()
+        {
+            let asset = try? UpdateInstaller.checksumAsset(for: okRelease)
+            expect(asset?.name == "SHA256SUMS.txt", "a release with a checksum passes the gate")
+        }
+        else
+        {
+            expect(false, "the sample feed decodes for the positive case")
         }
     }
 
