@@ -92,6 +92,19 @@ namespace
 {
 //per-thread, so two panes measuring at the same time cannot overwrite each other
 thread_local std::string g_measureError;
+
+//The string getters at the bottom of this file hand a `const char*` to Swift, which
+//reads it after we have already unlocked. The member it points into is reassigned by
+//the worker thread on nearly every progress tick, so returning its c_str() handed out
+//a pointer that could be freed mid-read. Copy into a per-thread buffer instead: the
+//pointer stays valid until this same thread asks for another string.
+thread_local std::string g_returnBuffer;
+
+const char* copyOut(const std::string& s)
+{
+    g_returnBuffer = s;
+    return g_returnBuffer.c_str();
+}
 }
 
 
@@ -274,7 +287,7 @@ extern "C" const char* offload_job_current_file(OffloadJob* job)
     if (!job)
         return "";
     std::lock_guard<std::mutex> lk(job->mu);
-    return job->currentFile.c_str();
+    return copyOut(job->currentFile);
 }
 
 
@@ -283,7 +296,7 @@ extern "C" const char* offload_job_error(OffloadJob* job)
     if (!job)
         return "";
     std::lock_guard<std::mutex> lk(job->mu);
-    return job->errorText.c_str();
+    return copyOut(job->errorText);
 }
 
 
@@ -292,7 +305,7 @@ extern "C" const char* offload_job_report_csv(OffloadJob* job)
     if (!job)
         return "";
     std::lock_guard<std::mutex> lk(job->mu);
-    return job->reportCsv.c_str();
+    return copyOut(job->reportCsv);
 }
 
 
