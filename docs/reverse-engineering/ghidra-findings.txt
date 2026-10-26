@@ -1,0 +1,20 @@
+FreeFileSync 14.12 - Ghidra function hunt (anchors -> candidate functions)
+Program: FreeFileSync_x86_64
+
+ANCHOR fff::synchronize : 1 string hit(s)
+  string at 0165e981
+ANCHOR FolderPairSyncer::synchronizeFileInt<LEFT> : 1 string hit(s)
+  string at 0165f991
+ANCHOR FolderPairSyncer::synchronizeFileInt<RIGHT> : 1 string hit(s)
+  string at 0165fa31
+ANCHOR ComparisonBuffer::compareByContent : 0 string hit(s)
+ANCHOR ComparisonBuffer::execute : 0 string hit(s)
+ANCHOR DeletionHandler::removeFileWithCallback : 0 string hit(s)
+ANCHOR applyVersioningLimit : 4 string hit(s)
+  string at 01660d47
+  string at 01660e47
+  string at 01661127
+  string at 01661227
+ANCHOR categorizeFileByContent : 0 string hit(s)
+
+TOTAL distinct candidate functions: 0

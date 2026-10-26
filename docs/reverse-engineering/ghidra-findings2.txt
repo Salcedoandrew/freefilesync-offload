@@ -1,0 +1,101 @@
+FreeFileSync 14.12 - Ghidra function hunt v2 (config strings -> code functions)
+Program: FreeFileSync_x86_64
+
+ANCHOR sync mode: sync_twoway : 1 string hit(s)
+  string at 01691113
+  references to string: 6
+  -> ref from 00933cce (not in a function)
+  -> ref from 00977d6a (not in a function)
+  -> ref from 00978baa (not in a function)
+  -> ref from 009e64a1 (not in a function)
+  -> ref from 01693cc0 (not in a function)
+  -> ref from 016a6960 (not in a function)
+ANCHOR sync mode: sync_mirror : 1 string hit(s)
+  string at 0169111f
+  references to string: 6
+  -> ref from 00933cf0 (not in a function)
+  -> ref from 00977dfc (not in a function)
+  -> ref from 00978c3c (not in a function)
+  -> ref from 009e64c7 (not in a function)
+  -> ref from 01693cc8 (not in a function)
+  -> ref from 016a6968 (not in a function)
+ANCHOR sync mode: sync_update : 1 string hit(s)
+  string at 0169112b
+  references to string: 6
+  -> ref from 00933d07 (not in a function)
+  -> ref from 00977e10 (not in a function)
+  -> ref from 00978c50 (not in a function)
+  -> ref from 009e64ed (not in a function)
+  -> ref from 01693cd0 (not in a function)
+  -> ref from 016a6970 (not in a function)
+ANCHOR versioning folder : 3 string hit(s)
+  string at 01649f7d
+  references to string: 6
+  -> function at 00636110 (size 16918)
+  -> function at 00636110 (size 16918)
+  -> function at 0061a2b0 (size 27763)
+  -> function at 0061a2b0 (size 27763)
+  -> function at 0061a2b0 (size 27763)
+  -> function at 0061a2b0 (size 27763)
+  string at 0164a15f
+  references to string: 9
+  -> function at 00629ff0 (size 2461)
+  -> function at 00629ff0 (size 2461)
+  -> function at 00629ff0 (size 2461)
+  -> function at 00629ff0 (size 2461)
+  -> function at 00629ff0 (size 2461)
+  -> function at 00629ff0 (size 2461)
+  -> function at 00622050 (size 5429)
+  -> function at 00622050 (size 5429)
+  -> function at 00622050 (size 5429)
+  string at 0164a9f4
+  references to string: 0
+ANCHOR recycle bin : 3 string hit(s)
+  string at 01649c53
+  references to string: 0
+  string at 0164a149
+  references to string: 2
+  -> function at 00629ff0 (size 2461)
+  -> function at 00622050 (size 5429)
+  string at 016548e7
+  references to string: 0
+ANCHOR delete_recycler : 1 string hit(s)
+  string at 016911c0
+  references to string: 4
+  -> function at 009da500 (size 6342)
+  -> function at 009c0160 (size 1076)
+  -> function at 005109ad (size 236)
+  -> ref from 009e6952 (not in a function)
+ANCHOR delete_versioning : 1 string hit(s)
+  string at 016af650
+  references to string: 2
+  -> function at 009da500 (size 6342)
+  -> ref from 009e699e (not in a function)
+ANCHOR WarnRecycleBinNotAvailable : 1 string hit(s)
+  string at 01649c4f
+  references to string: 2
+  -> function at 00636110 (size 16918)
+  -> function at 0061a2b0 (size 27763)
+ANCHOR UpdateLeft : 1 string hit(s)
+  string at 01649f1f
+  references to string: 2
+  -> function at 00636110 (size 16918)
+  -> function at 0061a2b0 (size 27763)
+ANCHOR UpdateRight : 1 string hit(s)
+  string at 01649f2a
+  references to string: 2
+  -> function at 00636110 (size 16918)
+  -> function at 0061a2b0 (size 27763)
+ANCHOR TwoWay : 1 string hit(s)
+  string at 0164a0e5
+  references to string: 1
+  -> function at 00622050 (size 5429)
+ANCHOR CustomDirections : 1 string hit(s)
+  string at 0164a104
+  references to string: 4
+  -> function at 00622050 (size 5429)
+  -> function at 006241e0 (size 9864)
+  -> function at 006241e0 (size 9864)
+  -> function at 006241e0 (size 9864)
+
+TOTAL distinct candidate functions: 8
