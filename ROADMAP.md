@@ -240,8 +240,23 @@ by three. Nothing in P0–P1 changed status:
 - The hash cache therefore covers Duplicate Detect only — read item 13's first sentence
   that way.
 - P0-1 through P0-4 were re-checked at the new line numbers: `allVerified()` still
-  ignores `broken` and still counts no expected files, and `capi.cpp` still returns
-  three `c_str()` pointers past the unlock. All four stand.
+  ignores `broken` and still counts no expected files, and `capi.cpp` still returned
+  three `c_str()` pointers past the unlock. All four stood at that point.
+
+### Fixed the same day
+
+**P0-1 — done.** `capi.cpp` now copies each of the three strings into a per-thread
+buffer while `job->mu` is held and returns that buffer (`copyOut`, the same idea
+`g_measureError` already used), so the pointer Swift reads after the unlock can no
+longer be freed under it by the worker's next progress tick. The C signature and the
+Swift side are unchanged. Not compiled here — same macOS-toolchain gap as the rest of
+this entry, so `make -f Makefile.macos` and CI are the check.
+
+One consequence worth knowing: the buffer is per-thread and singular, so a pointer
+returned by one getter stays valid only until the *same* thread calls another one.
+Swift copies each into a `String` immediately (`Engine.swift:38-51`), which is what
+makes that safe today; code that wants to hold two of these pointers at once must copy
+first. The three remaining P0s are untouched.
 
 ---
 
