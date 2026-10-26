@@ -12,6 +12,19 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.10.3 — 2026-10-26
+
+**The README now carries the upstream feature list, and About Offload has the email.**
+
+### Added
+- A new "Upstream features" section in the README: all 76 things FreeFileSync 14.12 does, each with a stable ID, where it lives in the binary, its config keys and how strongly the claim is evidenced, plus a worksheet for comparing another app against it. Read out of the shipped binary by static analysis, so the fork can be compared against upstream without re-running the analysis.
+- The About panel now shows gcastroandrew@gmail.com, as a mailto link under the website.
+
+### Fixed
+- The Credits.rtf added with the About box never displayed: the panel's credits are built in code (Entry.swift), which overrides the bundle file. It is removed, and the Makefile no longer copies it.
+
+---
+
 ## 0.10.2 — 2026-10-26
 
 **About Offload says what the app is, and who made it.**
