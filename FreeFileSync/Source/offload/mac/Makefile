@@ -57,11 +57,22 @@ bundle:
 	./bundle-dylibs.sh Offload.app
 
 # What a downloader gets: the bundle, a note about Gatekeeper, and a checksum.
+#
+# HOW-TO-OPEN.txt holds @VERSION@ and @ARCH@ instead of a hand-typed number and
+# architecture, and the note that ships is generated from it with both read out
+# of Info.plist and uname. A hand-typed number went stale once (the 0.7.0
+# download carried a note that said 0.4.0), and it went stale silently, because
+# copying a file cannot notice a disagreement. The guards below turn that into a
+# failed build.
 zip: bundle
 	rm -rf dist $(ARCHIVE)
 	mkdir -p dist
 	cp -R Offload.app dist/
-	cp HOW-TO-OPEN.txt dist/
+	sed -e 's/@VERSION@/$(VERSION)/g' -e 's/@ARCH@/$(ARCH)/g' HOW-TO-OPEN.txt > dist/HOW-TO-OPEN.txt
+	@if grep -qE '@(VERSION|ARCH)@' dist/HOW-TO-OPEN.txt; then \
+		echo "HOW-TO-OPEN.txt: a @VERSION@ or @ARCH@ placeholder was not substituted"; exit 1; fi
+	@if ! grep -qF '$(ARCHIVE)' dist/HOW-TO-OPEN.txt; then \
+		echo "HOW-TO-OPEN.txt does not name $(ARCHIVE)"; exit 1; fi
 	ditto -c -k --sequesterRsrc dist $(ARCHIVE)
 	shasum -a 256 $(ARCHIVE) > SHA256SUMS.txt
 	@cat SHA256SUMS.txt

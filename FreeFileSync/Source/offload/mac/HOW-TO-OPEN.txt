@@ -1,8 +1,8 @@
-Offload 0.4.0 - macOS app for copying camera cards to several drives at once
-=============================================================================
+Offload - macOS app for copying camera cards to several drives at once
+======================================================================
 
-Requires: macOS 13 or newer, Apple silicon (arm64). Intel Macs are not
-supported by this build.
+Version @VERSION@. Requires macOS 13 or newer, Apple silicon (arm64). Intel
+Macs are not supported by this build.
 
 There is nothing to install and nothing to configure. The app carries its own
 libraries, so it does not need Homebrew, wxWidgets, Xcode or the command line
@@ -32,7 +32,7 @@ dialog does, stated as a command:
 
 Check the download before you run it:
 
-    shasum -a 256 Offload-0.4.0-macos-arm64.zip
+    shasum -a 256 Offload-@VERSION@-macos-@ARCH@.zip
 
 and compare against the checksum published on the release page.
 
@@ -70,8 +70,8 @@ Delete Offload.app. It writes nothing outside the destinations you choose and
 its own reports; there is no daemon, no login item and no hidden state.
 
 
-Known limitations in 0.4.0
---------------------------
+Known limitations
+-----------------
 - No resume journal: if a job is interrupted, it restarts that file rather than
   resuming mid-file.
 - Not notarized; see "Why the warning appears" above.
