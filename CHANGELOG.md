@@ -8,7 +8,7 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
-## 0.6.0 — unreleased
+## 0.6.0 — 2026-10-25
 
 **A hash cache, so re-checking a card does not re-hash everything, and a
 broken-file check, so a corrupt photo is flagged instead of silently filed.**
