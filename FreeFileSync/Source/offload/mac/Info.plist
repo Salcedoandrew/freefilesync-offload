@@ -11,6 +11,7 @@
     <key>CFBundleVersion</key>           <string>0.10.1</string>
     <key>CFBundleShortVersionString</key><string>0.10.1</string>
     <key>LSMinimumSystemVersion</key>    <string>13.0</string>
+    <key>NSHumanReadableCopyright</key>  <string>© 2026 Andrew Salcedo</string>
     <key>NSHighResolutionCapable</key>   <true/>
     <key>NSPrincipalClass</key>          <string>NSApplication</string>
     <key>NSSupportsAutomaticTermination</key><false/>

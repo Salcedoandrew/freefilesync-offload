@@ -145,9 +145,9 @@ func installMainMenu(delegate: AppDelegate)
     let appMenu = NSMenu(title: "Offload")
 
     let about = NSMenuItem(title: "About Offload",
-                           action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                           action: #selector(AppDelegate.showAbout(_:)),
                            keyEquivalent: "")
-    about.target = NSApp
+    about.target = delegate
     appMenu.addItem(about)
     appMenu.addItem(.separator())
 
@@ -422,6 +422,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate
     @MainActor @objc func checkForUpdates(_ sender: Any?)
     {
         Updater.shared.checkFromMenu()
+    }
+
+    ///The stock panel says the name and the version and nothing else, which is not
+    ///much to show someone who just asked what this thing is. The credits carry who
+    ///made it and the sentence the README leads with; the copyright line underneath
+    ///comes from NSHumanReadableCopyright in Info.plist.
+    @MainActor @objc func showAbout(_ sender: Any?)
+    {
+        let centred = NSMutableParagraphStyle()
+        centred.alignment = .center
+
+        let credits = NSMutableAttributedString()
+
+        credits.append(NSAttributedString(
+            string: "Andrew Salcedo\n",
+            attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                         .foregroundColor: NSColor.labelColor,
+                         .paragraphStyle: centred]))
+
+        credits.append(NSAttributedString(
+            string: "heartfeltmedia.co\n\n",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.linkColor,
+                         .link: URL(string: "https://heartfeltmedia.co")!,
+                         .paragraphStyle: centred]))
+
+        credits.append(NSAttributedString(
+            string: "Verified media offload for camera cards: copies to every destination "
+                  + "at once, hashes every byte, reads each copy back, and leaves a report "
+                  + "you can check a year later.",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor,
+                         .paragraphStyle: centred]))
+
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Offload",
+            .credits: credits,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
