@@ -19,7 +19,7 @@ if an entry and the source disagree, the source is right.
 
 ## 2026-10-26 — audit 1
 
-**Commit** `81cb7b9` (0.6.0, unreleased) · **Checked** static reading only, see
+**Commit** `81cb7b9` (0.6.0) · **Checked** static reading only, see
 [limits](#what-this-audit-could-not-check).
 
 The engine's core is in better shape than its age suggests: the hashing is checked
@@ -61,8 +61,8 @@ refusals. Note what this does *not* buy: with an ad-hoc signature the checksum s
 proves only that the bytes arrived intact, not who wrote them (see item 14 below).
 
 **3. "OK: every file verified" can print while broken files are in the report.**
-`tally()` deliberately refuses to count a broken file as verified (`engine.cpp:647`,
-the `if (!f.broken)`), but `allVerified()` (`:652`) never looks at `broken` at all, so
+`tally()` deliberately refuses to count a broken file as verified (`engine.cpp:644`,
+the `if (!f.broken)`), but `allVerified()` (`:649`) never looks at `broken` at all, so
 a card with a truncated JPEG copies, reports, and exits — while `main.cpp:313` prints
 a sentence that is not true and any script wrapping the CLI sees `0`.
 
@@ -81,7 +81,7 @@ later; the second is a one-line wording change. Either way the current state is 
 contradiction, and the test at `tests.cpp:758` locks it in as intended behaviour.
 
 **4. A truncated report reads as success.** `allVerified()` counts failures; it never
-counts how many files it expected. In `runJob`'s worker catch (`engine.cpp:780`) a
+counts how many files it expected. In `runJob`'s worker catch (`engine.cpp:777`) a
 destination that throws mid-run only gets a failure record `if (d.files.empty())`, so
 a destination that managed 400 of 1,280 files and then hit an exception reports 400
 records, zero failures, and `ok == true`. The window goes green and the card can be
@@ -101,7 +101,7 @@ account for all of it, and/or always append a terminal failure record in that ca
 reasonable price for dragging 28 files of upstream `zen`/`afs` through a port; it is
 the wrong price for `offload/*.cpp`, which is this fork's own 3,200 lines of C++
 (plus 1,000 of tests) and its only real asset. The cost is visible already:
-`engine.cpp:647` is a statement whose body is `;` — a leftover from when verified
+`engine.cpp:644` is a statement whose body is `;` — a leftover from when verified
 bytes were counted separately — and it compiles silently.
 
 Split the flags: keep `-Wno-everything` on the `zen_`, `afs_` and `base_` rules, and
@@ -142,12 +142,9 @@ newly added source sits in `.measuring` while a different one is re-walked. Have
 **9. Small things, same pass.**
 The report directory is stamped to the second and keyed on source→dest
 (`Model.swift`, `stampFormatter`), so two runs of the same pair started within a
-second overwrite each other's `report.csv`. `--reverify` on a destination whose cache
-is warm is a byte-level proof only for files whose size or mtime moved — documented
-in the changelog, worth repeating in the README's Limits list, since it is the one
-place the headline promise quietly weakens. And while in there: the README badge and
-cost table both still say "107 engine assertions" while `offload/tests.cpp` now holds
-195 `check()` calls, so the shop window is describing the 0.4.0 suite. Regenerate the
+second overwrite each other's `report.csv`. While in the README: the badge and cost
+table both still say "107 engine assertions" while `offload/tests.cpp` now holds 197
+`check()` calls, so the shop window is describing the 0.4.0 suite. Regenerate the
 number rather than hand-editing it a third time.
 
 ### What this audit could not check
@@ -225,6 +222,26 @@ interoperable artefact in the whole design; it is worth one afternoon of certain
 presets, HTML report and a proper app icon (the last two leftover from Phase 3),
 S3/SFTP destinations — the `afs` layer would give SFTP nearly free, but it is not a
 wedding-card problem.
+
+### Correction — main moved past this audit
+
+This entry judged `81cb7b9`. While it was being written, two commits landed on main,
+so the citations above were re-checked against `16fcdf5` and the line numbers moved
+by three. Nothing in P0–P1 changed status:
+
+- **0.6.0 is released** (`16fcdf5 docs: release 0.6.0`), not unreleased as the header
+  first said. That matters for priority, not for the findings: the four P0s are in a
+  shipped build.
+- **`--reverify` no longer trusts the cache** (`068a808`), which removes the caveat
+  this entry had in item 9. Re-verify now hashes the destination fresh every time and
+  drops a stale entry on mismatch; the size+mtime blind spot survives only in the
+  already-present check, which is what the cache is for. Item 9 is now just the report
+  timestamp and the stale README numbers.
+- The hash cache therefore covers Duplicate Detect only — read item 13's first sentence
+  that way.
+- P0-1 through P0-4 were re-checked at the new line numbers: `allVerified()` still
+  ignores `broken` and still counts no expected files, and `capi.cpp` still returns
+  three `c_str()` pointers past the unlock. All four stand.
 
 ---
 
