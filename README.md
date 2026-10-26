@@ -7,7 +7,7 @@
 <p align="center">A fork of FreeFileSync v14.12 that copies a camera card to several drives at once, hashes every byte, reads each copy back, and leaves a report you can check a year later.</p>
 
 <p align="center">
-  <a href="https://github.com/Salcedoandrew/freefilesync-offload/releases"><img alt="latest release" src="https://img.shields.io/github/v/release/Salcedoandrew/freefilesync-offload?style=flat-square&labelColor=0B0C0E&color=D8A24A"></a>
+  <a href="https://github.com/Salcedoandrew/freefilesync-offload/releases"><img alt="latest release" src="https://img.shields.io/github/v/release/Salcedoandrew/freefilesync-offload?style=flat-square&labelColor=0B0C0E&color=D8A24A&cache=20261026"></a>
   <img alt="macOS 13+, Apple silicon" src="https://img.shields.io/badge/macOS_13%2B-arm64-0B0C0E?style=flat-square&logo=apple&logoColor=C8C4B8">
   <img alt="107 engine assertions" src="https://img.shields.io/badge/tests-107%20assertions-0B0C0E?style=flat-square">
   <img alt="licence GPLv3" src="https://img.shields.io/badge/licence-GPLv3-0B0C0E?style=flat-square">
