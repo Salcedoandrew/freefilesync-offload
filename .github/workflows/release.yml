@@ -1,33 +1,44 @@
 name: Release
 
-# Two ways in, one build:
-#   - a push to main whose Info.plist version has no release yet (the normal path:
-#     bump the version, commit, push - the tag is created by this workflow)
-#   - a v* tag push, kept so an existing tag still cuts its release
-#   - workflow_dispatch, to rebuild the current version after a failed run
+# A release is cut from a commit CI has already called green:
+#   - CI finishing on main - the normal path: bump the version, push, wait
+#   - a hand-pushed v* tag, for a release you want without waiting on a push
+#   - workflow_dispatch, to rebuild a version after a failed run
 #
-# `gh release create --target` creates the tag on the remote when it is missing,
-# which is the part a laptop push used to have to get right.
+# The tag goes on the commit that changed the bundle version, not on whatever
+# commit happened to trigger the run, and `gh release create --target` creates
+# the tag on the remote when it is missing, so no laptop has to push one. If
+# commits landed after the version bump, the run fails instead of publishing an
+# archive that silently leaves them out.
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   push:
-    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: write
 
-# One release at a time: a tag push and a main push naming the same version must
-# not race to create the same release.
+# One release at a time: a tag push and a green CI run naming the same version
+# must not race to create the same release.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  # Cheap gate on ubuntu, so an ordinary commit to main costs almost nothing.
-  # It answers one question: does this version already have a release?
+  # Cheap ubuntu gate. It answers one question: does this commit's version still
+  # need a release? A push that does not bump the version costs one short job.
   gate:
+    # CI finishing on a pull request is not a release candidate, and a red run
+    # is not either.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
@@ -35,6 +46,8 @@ jobs:
       should_release: ${{ steps.resolve.outputs.should_release }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Resolve version and check for an existing release
         id: resolve
@@ -44,8 +57,8 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             TAG="$GITHUB_REF_NAME"
           else
-            # The bundle version is the single source of truth, so the version
-            # the release is named after is the version inside the app.
+            # The bundle version is the single source of truth, so the release
+            # is named after the version inside the app it ships.
             VER=$(python3 -c "import plistlib,sys; print(plistlib.load(open(sys.argv[1],'rb'))['CFBundleShortVersionString'])" \
               FreeFileSync/Source/offload/mac/Info.plist)
             TAG="v$VER"
@@ -70,6 +83,54 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Full history: the next step walks back to find the commit that
+          # introduced this version.
+          fetch-depth: 0
+
+      # The tag names the commit that changed the version, so the tag and the
+      # archive describe the same code.
+      #
+      # A release is refused rather than cut from a tree that leaves commits
+      # behind: if the newest commit is not the one that bumped the version,
+      # whatever landed after it (a fix, a test, a revert) would be missing from
+      # the archive while the tag claimed otherwise. A hand-pushed tag is the
+      # exception, because there the tag itself picks the commit.
+      - name: Check the release commit
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          PLIST="FreeFileSync/Source/offload/mac/Info.plist"
+
+          version_at() {
+            git show "$1:${PLIST}" | python3 -c \
+              "import plistlib,sys; print(plistlib.loads(sys.stdin.buffer.read())['CFBundleShortVersionString'])"
+          }
+
+          HEAD_VERSION=$(version_at "$GITHUB_SHA")
+          if [ "$HEAD_VERSION" != "$VERSION" ]; then
+            echo "::error::$GITHUB_SHA ships version $HEAD_VERSION, but this release is for $VERSION."
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "Releasing the tagged commit $(git rev-parse --short HEAD), which ships $VERSION."
+            exit 0
+          fi
+
+          BUMP=$(git log -1 --format=%H -S"<string>${VERSION}</string>" -- "$PLIST")
+          if [ -z "$BUMP" ]; then
+            echo "::error::No commit in this history introduced <string>${VERSION}</string>, so the version bump cannot be located."
+            exit 1
+          fi
+          if [ "$BUMP" != "$GITHUB_SHA" ]; then
+            echo "::error::${GITHUB_SHA} is $(git rev-list --count "${BUMP}..${GITHUB_SHA}") commit(s) after the version bump (${BUMP}), so publishing now would leave them out of the archive."
+            echo "::error::Put the version bump last, or push a v${VERSION} tag at the commit you mean to release."
+            git log --oneline "${BUMP}..${GITHUB_SHA}" | sed 's/^/    not in this release: /'
+            exit 1
+          fi
+          echo "Releasing the version-bump commit $(git rev-parse --short HEAD), which ships $VERSION."
 
       - name: Install dependencies
         run: brew install llvm wxwidgets glib pkg-config openssl curl libssh2 libidn2
@@ -87,7 +148,8 @@ jobs:
       # Bundles Offload.app self-contained and writes
       # Offload-<version>-macos-arm64.zip + SHA256SUMS.txt (the updater
       # checks the zip against the sums file). The version comes from
-      # Info.plist.
+      # Info.plist, and the zip target refuses to package a note that names a
+      # different version.
       - name: Build release zip
         working-directory: FreeFileSync/Source/offload/mac
         run: make zip
@@ -106,7 +168,7 @@ jobs:
 
       # Idempotent: a re-run uploads the assets to the existing release
       # instead of failing because the release already exists. --target makes
-      # GitHub create the tag at this commit when it does not exist yet.
+      # GitHub create the tag at this commit when it is missing.
       - name: Create GitHub release
         working-directory: FreeFileSync/Source/offload/mac
         env:
