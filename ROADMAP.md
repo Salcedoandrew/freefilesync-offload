@@ -256,7 +256,44 @@ One consequence worth knowing: the buffer is per-thread and singular, so a point
 returned by one getter stays valid only until the *same* thread calls another one.
 Swift copies each into a `String` immediately (`Engine.swift:38-51`), which is what
 makes that safe today; code that wants to hold two of these pointers at once must copy
-first. The three remaining P0s are untouched.
+first.
+
+**P0-2 — done.** The updater now refuses to install when a release publishes no
+`SHA256SUMS.txt` (`guard let sumsAsset = release.sums else { throw .checksumMissing }`),
+and the checksum download's HTTP status is checked instead of ignored. A release that
+cannot be verified no longer replaces the installed app.
+
+**P0-3 — done, and it changed behaviour on purpose.** Damaged source files still copy
+faithfully and still carry a plain-language reason in the report, but they now stop the
+job claiming success: `allVerified()` returns false when any destination counted a
+damaged file, the CLI prints `N damaged source file(s) were copied but never counted as
+verified` and exits 1, and the window says the same in its own words rather than the
+misleading "the source could not be read". The consequence is that one corrupt JPEG
+makes the run fail — which is the point, because the exit code is what a script checks
+before reformatting a card. The `--allow-broken` escape hatch sketched in P0-3 above was
+deliberately not added yet: without it, a card known to hold a bad file can only be
+recorded as failed.
+
+**P0-4 — done.** `DestReport` now carries `expectedFiles`, pinned from the source count
+before any worker starts, and `allVerified()` refuses a report that does not hold exactly
+that many records — so a destination that dies mid-run reads as incomplete however clean
+its counters look. A new `testTruncatedReport` covers the short report, the complete one,
+the broken-file block and the job-level error.
+
+The app's own fixtures had to follow P0-3: `makeUITestFixture` and the CI self-test wrote
+random bytes into files named `.CR3`, which the media check reads as damaged. Both now
+write a real CR3 header first, so the fixture exercises the transfer path instead of the
+damaged-file path.
+
+**Transfer stats — new, not from this audit.** Each row now reports rate, items/sec,
+`N of M files`, `bytes of bytes` and the ETA while it runs, then the counts and elapsed
+time when it finishes; pause/resume is a labelled `Pause`/`Continue` pill instead of an
+8-point glyph. A paused row drops the rate and the ETA rather than leaving frozen numbers
+on screen.
+
+**Still not compiled or run here.** No macOS toolchain in this environment, so the engine
+changes and the Swift changes are both static-only: `make -f Makefile.macos test`, the
+fit/update self-tests and CI are where they will first actually build.
 
 ---
 
