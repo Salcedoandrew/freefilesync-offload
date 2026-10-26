@@ -32,6 +32,7 @@ enum UpdateSelfTest
     {
         versions()
         feed()
+        feedOrdering()
         installGate()
         sums()
         hashing()
@@ -119,6 +120,71 @@ enum UpdateSelfTest
         {
             expect((try? f.releaseInfo()) == nil, "a release without an Offload zip is refused")
         }
+    }
+
+    //-- what the live feed is judged against ------------------------------------
+
+    ///The check itself, not the decoder and not `>` on its own. The failure this is
+    ///here for is the one nobody notices until they are stuck on an old build: a copy
+    ///that is offered nothing, or one that is talked into a downgrade.
+    private static func feedOrdering()
+    {
+        func release(_ tag: String) -> ReleaseInfo?
+        {
+            let numeric = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            let json = sampleJSON
+                .replacingOccurrences(of: "v0.4.1", with: tag)
+                .replacingOccurrences(of: "0.4.1", with: numeric)
+            guard let data = json.data(using: .utf8),
+                  let feed = try? JSONDecoder().decode(FeedRelease.self, from: data)
+            else { return nil }
+            return try? feed.releaseInfo()
+        }
+
+        guard let nine = release("v0.9.0"),
+              let eightOne = release("v0.8.1"),
+              let ten = release("v0.10.0"),
+              let running = AppVersion("0.8.1"),
+              let current = AppVersion("0.9.0")
+        else { return expect(false, "the 0.9.0 feed payload decodes") }
+
+        //the case that ships: an 0.8.1 install must be offered 0.9.0, with the archive
+        //named for 0.9.0 and its checksum attached
+        switch Updater.decision(current: running, release: nine)
+        {
+        case .available(let offered):
+            expect(offered.version == current, "an 0.8.1 copy is offered the feed's 0.9.0")
+            expect(offered.zip.name == "Offload-0.9.0-macos-arm64.zip",
+                   "the offered archive is the 0.9.0 zip (got \(offered.zip.name))")
+            expect(offered.sums != nil, "the offered release carries a checksum")
+        case .upToDate(let now, let latest):
+            expect(false, "an 0.8.1 copy is offered 0.9.0 (said up to date: \(now.raw) vs \(latest.raw))")
+        default:
+            expect(false, "an 0.8.1 copy is offered 0.9.0 (unexpected phase)")
+        }
+
+        //already current: nothing to install
+        expect(Updater.decision(current: current, release: nine) == .upToDate(current: current, latest: current),
+               "a 0.9.0 copy is told it is up to date")
+
+        //the feed lagging behind the copy must not hand out a downgrade
+        expect(Updater.decision(current: current, release: eightOne) == .upToDate(current: current, latest: eightOne.version),
+               "an 0.8.1 feed does not offer a running 0.9.0 a downgrade")
+
+        //numeric, not lexical: 0.10.0 has to beat 0.9.0 or 0.9.0 would look newest forever
+        if case .available(let offered) = Updater.decision(current: current, release: ten)
+        {
+            expect(offered.version == AppVersion("0.10.0"), "0.10.0 in the feed beats a 0.9.0 copy")
+        }
+        else
+        {
+            expect(false, "0.10.0 in the feed beats a 0.9.0 copy")
+        }
+
+        //one release, chosen by GitHub: the endpoint must stay /releases/latest, since
+        //the list at /releases is ordered by publish date and its first entry can be old
+        expect(Updater.latestEndpoint.path.hasSuffix("/releases/latest"),
+               "the feed is the latest-release endpoint (got \(Updater.latestEndpoint.path))")
     }
 
     //-- the install gate -------------------------------------------------------

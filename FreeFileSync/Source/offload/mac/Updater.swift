@@ -450,15 +450,35 @@ final class Updater: ObservableObject
         return URLSession(configuration: config)
     }()
 
+    ///The feed a check reads. GitHub hands back one release here, not a list, so the
+    ///app never gets to pick by position - it has to decide on the version number.
+    ///That is why this is `/releases/latest` and not `/releases`: the list is ordered
+    ///by publish date, and a patch published late would outrank a newer version.
+    nonisolated static var latestEndpoint: URL
+    {
+        URL(string: "https://api.github.com/repos/Salcedoandrew/freefilesync-offload/releases/latest")!
+    }
+
     var feedURL: URL
     {
         if let override = Updater.feedOverride { return override }
-        return URL(string: "https://api.github.com/repos/Salcedoandrew/freefilesync-offload/releases/latest")!
+        return Updater.latestEndpoint
     }
 
     var currentVersion: AppVersion?
     {
         AppBundle.current?.version
+    }
+
+    ///The comparison a check ends on, out on its own so the self-test can drive it with
+    ///real release payloads: a copy one release behind is offered the feed's version, a
+    ///current copy is told it is current, and a feed that lags behind the running copy
+    ///never offers a downgrade.
+    nonisolated static func decision(current: AppVersion, release: ReleaseInfo) -> Phase
+    {
+        release.version > current
+            ? .available(release)
+            : .upToDate(current: current, latest: release.version)
     }
 
     //-- checking ---------------------------------------------------------------
@@ -483,14 +503,7 @@ final class Updater: ObservableObject
             let release = try feed.releaseInfo()
             guard let current = currentVersion else { throw UpdateError.feedUnreadable("this bundle has no version") }
 
-            if release.version > current
-            {
-                phase = .available(release)
-            }
-            else
-            {
-                phase = .upToDate(current: current, latest: release.version)
-            }
+            phase = Updater.decision(current: current, release: release)
         }
         catch let error as UpdateError
         {
