@@ -59,6 +59,12 @@ struct Options
     //scan and report what would happen, touch nothing
     bool dryRun = false;
 
+    //The Skip field's patterns, as typed: `*.LRV | MISC/` (see filter.h). Empty
+    //means copy everything the junk rules allow. Parsed once per job, and the
+    //same walk that plans the copy applies it, so the fit check and the transfer
+    //cannot disagree about how many files are coming.
+    std::string exclude;
+
     //limit parallelism when a slow destination must not be throttled by a fast one
     size_t maxDestinations = 8;
 
@@ -84,8 +90,9 @@ struct Options
 JobReport runJob(const Options& opts);
 
 //Total bytes and file count a transfer from this source would carry, counted with
-//exactly the same walk and junk rules runJob uses. This is what the window's fit
-//check compares against free space, so "what will be copied" has one owner.
-//Returns false with err set when the source cannot be walked.
-bool measureSource(const Zstring& sourceRoot, uint64_t& bytesOut, size_t& filesOut, std::string& err);
+//exactly the same walk, junk rules and Skip patterns runJob uses. This is what the
+//window's fit check compares against free space, so "what will be copied" has one
+//owner. Returns false with err set when the source cannot be walked.
+bool measureSource(const Zstring& sourceRoot, const std::string& excludeText,
+                   uint64_t& bytesOut, size_t& filesOut, std::string& err);
 }

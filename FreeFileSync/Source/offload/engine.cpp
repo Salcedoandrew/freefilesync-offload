@@ -5,6 +5,7 @@
 #include "engine.h"
 #include "broken.h"
 #include "cache.h"
+#include "filter.h"
 #include "hash.h"
 
 #include <zen/file_access.h>
@@ -144,10 +145,14 @@ Zstring joinRel(const Zstring& dir, const Zstring& name)
     return dir.empty() ? name : dir + Zstr('/') + name;
 }
 
-//recursive walk; returns files relative to root, skipping card junk
+//recursive walk; returns files relative to root, skipping card junk and anything
+//the job's Skip patterns exclude. `filter` may be null, which is the default: the
+//destination index is always built unfiltered, so a file that is excluded from the
+//copy cannot change how the files that are not excluded are matched.
 void scanTree(const Zstring& absDir, const Zstring& relDir,
               std::vector<SourceFile>& filesOut, std::map<Zstring, DestEntry>& mapOut,
-              const std::atomic<bool>* cancel, size_t depth = 0)
+              const std::atomic<bool>* cancel, const ExcludeFilter* filter = nullptr,
+              size_t depth = 0)
 {
     if (depth > 64) //guards against pathological nesting / symlink-free loops
         return;
@@ -162,6 +167,8 @@ void scanTree(const Zstring& absDir, const Zstring& relDir,
         if (isCacheFileName(fi.itemName))
             return; //the hash cache is metadata, not data
         const Zstring rel = joinRel(relDir, fi.itemName);
+        if (filter && !filter->empty() && filter->matches(zen::utfTo<std::string>(rel)))
+            return;
         filesOut.push_back({ rel, fi.fileSize, fi.modTime });
         mapOut[rel] = { fi.fileSize, fi.modTime };
     },
@@ -171,7 +178,12 @@ void scanTree(const Zstring& absDir, const Zstring& relDir,
             return;
         if (cancel && cancel->load())
             return;
-        scanTree(fo.fullPath, joinRel(relDir, fo.itemName), filesOut, mapOut, cancel, depth + 1);
+        //An excluded folder is not descended into: nothing under it is counted by
+        //the fit check or copied, and a deep junk tree costs nothing to skip.
+        const Zstring childRel = joinRel(relDir, fo.itemName);
+        if (filter && !filter->empty() && filter->matches(zen::utfTo<std::string>(childRel)))
+            return;
+        scanTree(fo.fullPath, childRel, filesOut, mapOut, cancel, filter, depth + 1);
     },
     [](const SymlinkInfo&) {}); //symlinks are not followed and not copied
 }
@@ -689,16 +701,21 @@ size_t totalSucceeded(const JobReport& job)
 }
 
 
-bool measureSource(const Zstring& sourceRoot, uint64_t& bytesOut, size_t& filesOut, std::string& err)
+bool measureSource(const Zstring& sourceRoot, const std::string& excludeText,
+                   uint64_t& bytesOut, size_t& filesOut, std::string& err)
 {
     bytesOut = 0;
     filesOut = 0;
+
+    //The same filter the job will use, parsed once here and once there: the fit
+    //check must count what the copy will carry, not what the card holds.
+    const ExcludeFilter filter = ExcludeFilter::parse(excludeText);
 
     std::vector<SourceFile> files;
     std::map<Zstring, DestEntry> ignored;
     try
     {
-        scanTree(appendSeparator(sourceRoot), Zstring(), files, ignored, nullptr);
+        scanTree(appendSeparator(sourceRoot), Zstring(), files, ignored, nullptr, &filter);
     }
     catch (const FileError& e)
     {
@@ -724,13 +741,18 @@ JobReport runJob(const Options& opts)
     job.dryRun      = opts.dryRun;
     job.reverifyOnly = opts.reverifyOnly;
 
+    //One filter, parsed once, shared by the scan below and recorded in the report:
+    //"what was skipped" belongs in the receipt, not only in the window.
+    const ExcludeFilter filter = ExcludeFilter::parse(opts.exclude);
+    job.exclude = filter.text();
+
     //scan the source once; every destination shares the same file list
     std::vector<SourceFile> source;
     {
         std::map<Zstring, DestEntry> ignored;
         try
         {
-            scanTree(appendSeparator(opts.sourceRoot), Zstring(), source, ignored, opts.cancel);
+            scanTree(appendSeparator(opts.sourceRoot), Zstring(), source, ignored, opts.cancel, &filter);
         }
         catch (const FileError& e)
         {
@@ -748,6 +770,17 @@ JobReport runJob(const Options& opts)
         }
     }
     std::sort(source.begin(), source.end(), [](const SourceFile& l, const SourceFile& r) { return l.relPath < r.relPath; });
+
+    //A Skip field with a stray `*` in it leaves nothing to copy, and an empty job
+    //that reports success is the exact failure this tool exists to prevent: the
+    //card gets formatted because "it said ok". Refuse it by name instead.
+    if (source.empty() && !filter.empty())
+    {
+        job.finishedAt = std::time(nullptr);
+        job.error = "every file was excluded by the Skip patterns (";
+        job.error += filter.text() + "): nothing to copy";
+        return job;
+    }
 
     //Judge the media headers once, up front, while the scan is still the
     //phase in progress: every destination shares the same verdict, and the

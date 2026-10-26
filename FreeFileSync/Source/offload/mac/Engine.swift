@@ -11,12 +11,15 @@ final class EngineJob
 
     init?(source: String, destination: String, reportDir: String,
           hashAlgo: Int32 = Int32(OFFLOAD_HASH_XXH64),
-          verifyMode: Int32 = Int32(OFFLOAD_VERIFY_HASH))
+          verifyMode: Int32 = Int32(OFFLOAD_VERIFY_HASH),
+          exclude: String = "")
     {
         let created = source.withCString { src in
             destination.withCString { dst in
                 reportDir.withCString { rep in
-                    offload_job_start(src, dst, rep, hashAlgo, verifyMode, 0)
+                    exclude.withCString { skip in
+                        offload_job_start(src, dst, rep, hashAlgo, verifyMode, 0, skip)
+                    }
                 }
             }
         }
@@ -81,11 +84,19 @@ struct MeasureFailure: Error
 
 enum SourceMeasure
 {
-    static func measure(_ path: String) -> Result<SourceMeasurement, MeasureFailure>
+    ///`exclude` is the Skip field's text. Passing it is not optional politeness:
+    ///the fit check has to count what the job will copy, so a filtered run and the
+    ///number beside the destination must come from the same patterns.
+    static func measure(_ path: String, exclude: String = "") -> Result<SourceMeasurement, MeasureFailure>
     {
         var bytes: UInt64 = 0
         var files: UInt64 = 0
-        let ok = path.withCString { offload_source_measure($0, &bytes, &files) }
+        let ok = path.withCString
+        { src in
+            exclude.withCString { skip in
+                offload_source_measure(src, skip, &bytes, &files)
+            }
+        }
         guard ok != 0 else
         {
             let raw = offload_measure_error().map { String(cString: $0) } ?? ""

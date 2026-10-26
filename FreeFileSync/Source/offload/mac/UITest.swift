@@ -91,6 +91,8 @@ enum UIStateWriter
             "canStartTransfer": model.canStartTransfer,
             "queuedTransfers": model.queuedCount,
             "allPaused": model.allPaused,
+            "subfolderTemplate": model.subfolderTemplate,
+            "excludeText": model.excludeText,
             "summaryVisible": model.summary != nil,
             "summaryFiles": Int(model.summary?.files ?? 0),
             "summaryBytes": Int(model.summary?.bytes ?? 0),

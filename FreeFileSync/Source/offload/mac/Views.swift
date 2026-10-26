@@ -470,9 +470,63 @@ struct TransfersPane: View
 
             Rectangle().fill(Theme.strokeSoft).frame(height: 1)
 
+            settingsRow
+
+            Rectangle().fill(Theme.strokeSoft).frame(height: 1)
+
             footer
         }
         .background(Theme.columnBG)
+        //A measurement taken with the old patterns is not an answer about the
+        //next run, so the fit check is re-taken the moment the Skip field moves.
+        .onChange(of: model.excludeText)
+        { _ in model.excludeFilterChanged() }
+    }
+
+    ///Two fields that shape every queued run: the folder to create inside each
+    ///destination, and what to leave behind. Both may stay blank, and blank means
+    ///exactly what this window did before they existed.
+    private var settingsRow: some View
+    {
+        HStack(spacing: 8)
+        {
+            settingField(icon: "folder",
+                         placeholder: "Subfolder \u{00B7} %Date% works",
+                         text: $model.subfolderTemplate,
+                         anchor: "subfolder-field",
+                         help: "Folder to create under each destination. Blank uses the card's own name. " +
+                               "%Date% (2026-10-26), %Year%, %Month%, %Day%, %Card%. A slash nests folders.")
+
+            settingField(icon: "line.3.horizontal.decrease",
+                         placeholder: "Skip \u{00B7} *.LRV | MISC/",
+                         text: $model.excludeText,
+                         anchor: "skip-field",
+                         help: "What not to copy, separated by |. * and ? are wildcards, a trailing / skips a whole " +
+                               "folder, and matching ignores case. Same patterns as --exclude on the command line.")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func settingField(icon: String, placeholder: String, text: Binding<String>,
+                              anchor: String, help: String) -> some View
+    {
+        HStack(spacing: 5)
+        {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(Theme.textTertiary)
+
+            TextField(placeholder, text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textPrimary)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.buttonBG2))
+        .help(help)
+        .testAnchor(anchor)
     }
 
     private var addTitle: String

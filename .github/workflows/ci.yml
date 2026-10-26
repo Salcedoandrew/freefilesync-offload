@@ -21,6 +21,12 @@ jobs:
         working-directory: FreeFileSync/Source
         run: make -f Makefile.macos test
 
+      # The Skip matcher has no wx/glib dependency, so it builds and runs on its
+      # own. Cheap, and it is the one piece that can silently lose files.
+      - name: Skip-pattern tests
+        working-directory: FreeFileSync/Source
+        run: make -f Makefile.macos filter-test
+
       - name: Build engine archive for the app
         working-directory: FreeFileSync/Source
         run: make -f Makefile.macos liboffloadapi.a

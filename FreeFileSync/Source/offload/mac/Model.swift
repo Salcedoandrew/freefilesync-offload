@@ -208,6 +208,10 @@ final class Transfer: ObservableObject, Identifiable
     let source: Device
     let destination: Device
     let subfolder: String
+    ///The Skip patterns this row was planned with. Captured when it is queued, not
+    ///read at start: editing the field afterwards must not change a plan the user
+    ///already looked at and pressed Add on.
+    let exclude: String
     ///Set when the row is started, not when it is queued.
     private(set) var job: EngineJob?
 
@@ -242,11 +246,12 @@ final class Transfer: ObservableObject, Identifiable
     private var sawFinish = false
 
     init(source: Device, destination: Device, subfolder: String, job: EngineJob?,
-         destinationPath: String = "", reportDirPath: String = "")
+         destinationPath: String = "", reportDirPath: String = "", exclude: String = "")
     {
         self.source = source
         self.destination = destination
         self.subfolder = subfolder
+        self.exclude = exclude
         self.job = job
         self.destinationPath = destinationPath
         self.reportDirPath = reportDirPath
@@ -480,7 +485,7 @@ final class Transfer: ObservableObject, Identifiable
     {
         guard phase == .queued else { return }
         guard let job = EngineJob(source: source.path, destination: destinationPath,
-                                  reportDir: reportDirPath) else
+                                  reportDir: reportDirPath, exclude: exclude) else
         {
             phase = .failed
             errorText = "cannot open source"
@@ -516,11 +521,20 @@ final class AppModel: ObservableObject
     @Published var isTargetingSources = false
     @Published var isTargetingDestinations = false
 
+    ///The Subfolder field: a folder name under each destination, with date macros.
+    ///Empty keeps the old behaviour, which is the card's own name.
+    @Published var subfolderTemplate = ""
+
+    ///The Skip field: `*.LRV | MISC/`. Same patterns the CLI takes as --exclude.
+    @Published var excludeText = ""
+
     ///Frames of clickable views, published by the views themselves. Used only by
     ///`--ui-test`; the running app never reads it.
     var anchorFrames: [String: CGRect] = [:]
 
     private var timer: Timer?
+    ///Kept alive while the Skip field settles; see excludeFilterChanged().
+    private var excludeDebounce: Timer?
     private var measuredAt: [UUID: Date] = [:]
     private var lastFreeSpacePoll = Date.distantPast
     private let reportRoot: URL
@@ -540,7 +554,11 @@ final class AppModel: ObservableObject
         }
     }
 
-    deinit { timer?.invalidate() }
+    deinit
+    {
+        timer?.invalidate()
+        excludeDebounce?.invalidate()
+    }
 
     func tick()
     {
@@ -584,9 +602,14 @@ final class AppModel: ObservableObject
         measuredAt[id] = Date()
         let path = sources[index].path
 
+        //The filter is read here, on the main actor, so the measurement on the
+        //background queue is asking about one known set of patterns even if the
+        //field is edited again while it walks.
+        let exclude = excludeText
+
         DispatchQueue.global(qos: .userInitiated).async
         { [weak self] in
-            let result = SourceMeasure.measure(path)
+            let result = SourceMeasure.measure(path, exclude: exclude)
             DispatchQueue.main.async
             {
                 guard let self, let i = self.sources.firstIndex(where: { $0.id == id }) else { return }
@@ -783,7 +806,7 @@ final class AppModel: ObservableObject
         {
             for destination in selectedDestinationDevices
             {
-                let subfolder = source.name
+                let subfolder = expandedSubfolder(for: source)
                 let stamp = Self.stampFormatter.string(from: Date())
                 let reportDir = reportRoot
                     .appendingPathComponent("\(stamp) \(source.name) to \(destination.name)", isDirectory: true)
@@ -796,9 +819,76 @@ final class AppModel: ObservableObject
                 //Queued, not started: Add plans the copy, Transfer performs it.
                 let transfer = Transfer(source: source, destination: destination,
                                         subfolder: subfolder, job: nil,
-                                        destinationPath: destPath, reportDirPath: reportDir.path)
+                                        destinationPath: destPath, reportDirPath: reportDir.path,
+                                        exclude: excludeText)
                 transfer.phase = .queued
                 transfers.append(transfer)
+            }
+        }
+    }
+
+    //--- the Subfolder field ----------------------------------------------------
+
+    ///Turns the field into a folder name. Empty means the card's name, which is
+    ///what every run did before the field existed; `%Date%` and friends are
+    ///filled from today. Resolved when the row is queued, so a report written
+    ///tomorrow still says the folder it actually used.
+    func expandedSubfolder(for source: Device, on date: Date = Date()) -> String
+    {
+        let template = subfolderTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !template.isEmpty else { return source.name }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let isoDate = formatter.string(from: date)
+
+        func pad(_ value: Int?, _ width: Int) -> String
+        {
+            String(format: "%0\(width)d", value ?? 0)
+        }
+
+        var name = template
+        name = name.replacingOccurrences(of: "%Card%",  with: source.name)
+        name = name.replacingOccurrences(of: "%Date%",  with: isoDate)
+        name = name.replacingOccurrences(of: "%Year%",  with: pad(parts.year, 4))
+        name = name.replacingOccurrences(of: "%Month%", with: pad(parts.month, 2))
+        name = name.replacingOccurrences(of: "%Day%",   with: pad(parts.day, 2))
+        return sanitizedSubfolder(name, fallback: source.name)
+    }
+
+    ///A template is user text that becomes a path, so the parts that would climb
+    ///out of the destination or break it (`.` and `..`, an absolute leading `/`,
+    ///a colon) are removed rather than trusted. Nested folders — `%Year%/%Month%`
+    ///— are kept, because that is the useful case.
+    private func sanitizedSubfolder(_ raw: String, fallback: String) -> String
+    {
+        let parts = raw.split(separator: "/", omittingEmptySubsequences: true)
+            .map       { $0.trimmingCharacters(in: .whitespaces) }
+            .filter    { !$0.isEmpty && $0 != "." && $0 != ".." }
+            .map       { $0.replacingOccurrences(of: ":", with: "-") }
+        let joined = parts.joined(separator: "/")
+        return joined.isEmpty ? fallback : joined
+    }
+
+    ///The Skip field changed, so every measurement on screen was taken with the
+    ///old patterns: the fit check would be answering a question the next run will
+    ///not ask. Re-walk once the typing stops - one walk per keystroke would walk
+    ///the whole card (and the next one would overtake it) for nothing.
+    func excludeFilterChanged()
+    {
+        excludeDebounce?.invalidate()
+        excludeDebounce = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false)
+        { [weak self] _ in
+            guard let self else { return }
+            for device in self.sources
+            {
+                self.startMeasurement(of: device.id)
             }
         }
     }

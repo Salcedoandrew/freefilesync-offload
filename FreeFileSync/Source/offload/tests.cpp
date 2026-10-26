@@ -10,6 +10,7 @@
 #include "engine.h"
 #include "broken.h"
 #include "cache.h"
+#include "filter.h"
 #include "hash.h"
 #include "report.h"
 
@@ -528,7 +529,7 @@ void testMeasureSource()
     uint64_t measuredBytes = 0;
     size_t   measuredFiles = 0;
     std::string err;
-    check(measureSource(s.source, measuredBytes, measuredFiles, err), "measureSource succeeds");
+    check(measureSource(s.source, "", measuredBytes, measuredFiles, err), "measureSource succeeds");
     check(err.empty(), "measureSource reports no error on success");
     check(measuredFiles == copiedFiles, "measured file count matches what was copied (" +
           std::to_string(measuredFiles) + " vs " + std::to_string(copiedFiles) + ")");
@@ -540,7 +541,7 @@ void testMeasureSource()
     uint64_t missingBytes = 0;
     size_t   missingFiles = 0;
     std::string missingErr;
-    check(!measureSource(appendSeparator(s.source) + Zstr("no-such-folder"),
+    check(!measureSource(appendSeparator(s.source) + Zstr("no-such-folder"), "",
                          missingBytes, missingFiles, missingErr),
           "measuring a folder that does not exist fails");
     check(!missingErr.empty(), "failed measurement carries a reason");
@@ -1012,6 +1013,102 @@ void testTruncatedReport()
 }
 
 
+//--------------------------------------------------------------- the Skip field
+//Skip is the one control that can silently lose a wedding: a pattern that matches
+//too much leaves the RAW behind while the run still says it verified. So every
+//check here is either "the fit check and the copy agree" or "nothing is lost".
+void testExcludeFilter()
+{
+    std::cout << "exclude filter\n";
+    Scratch s(Zstr("filter"));
+    s.buildSource();
+    writeText(appendSeparator(s.source) + Zstr("DCIM/100CANON/IMG_0001.LRV"), pattern(4000));
+    createDirectoryIfMissingRecursion(appendSeparator(s.source) + Zstr("MISC/thumbs"));
+    writeText(appendSeparator(s.source) + Zstr("MISC/notes.txt"), "notes");
+    writeText(appendSeparator(s.source) + Zstr("MISC/thumbs/pick.jpg"), validJpeg(3000));
+
+    const Zstring destAll  = s.dest("DEST_ALL");
+    const Zstring destSome = s.dest("DEST_SOME");
+    createDirectoryIfMissingRecursion(destAll);
+    createDirectoryIfMissingRecursion(destSome);
+
+    //nothing filtered: proxies and MISC come along, as they do today
+    const JobReport allJob = runJob(makeOptions(s, { destAll }));
+    check(allVerified(allJob), "an unfiltered run verifies");
+    check(allJob.dests[0].files.size() == 7,
+          "the unfiltered run carries the proxy and MISC (got " +
+          std::to_string(allJob.dests[0].files.size()) + ")");
+
+    //filtered: the proxy and the whole MISC subtree go, the CR3 beside the proxy stays
+    Options some = makeOptions(s, { destSome });
+    some.exclude = "*.LRV | MISC/";
+    const JobReport someJob = runJob(some);
+    check(allVerified(someJob), "a filtered run verifies what it did copy");
+    check(someJob.dests[0].files.size() == 4,
+          "a filtered run carries only the four real clips (got " +
+          std::to_string(someJob.dests[0].files.size()) + ")");
+    check(someJob.exclude == "*.LRV | MISC/",
+          "the report records the patterns it applied (got \"" + someJob.exclude + "\")");
+
+    bool sawProxy = false;
+    bool sawMisc  = false;
+    bool sawCr3   = false;
+    for (const FileRecord& f : someJob.dests[0].files)
+    {
+        const std::string rel = zen::utfTo<std::string>(f.relPath);
+        if (rel.find(".LRV") != std::string::npos) sawProxy = true;
+        if (rel.rfind("MISC/", 0) == 0)              sawMisc  = true;
+        if (rel == "DCIM/100CANON/IMG_0003.CR3")     sawCr3   = true;
+    }
+    check(!sawProxy, "the .LRV proxy is not in the filtered report");
+    check(!sawMisc, "nothing under MISC/ is in the filtered report");
+    check(sawCr3, "the CR3 beside the excluded proxy is still copied");
+    check(!itemExists(appendSeparator(destSome) + Zstr("DCIM/100CANON/IMG_0001.LRV")),
+          "no excluded file is written to the destination");
+    check(!itemExists(appendSeparator(destSome) + Zstr("MISC")),
+          "an excluded folder is never created on the destination");
+
+    //the fit check must count what the copy carries, not what the card holds
+    uint64_t filteredBytes = 0;
+    size_t   filteredFiles = 0;
+    std::string filterErr;
+    check(measureSource(s.source, "*.LRV | MISC/", filteredBytes, filteredFiles, filterErr),
+          "measureSource accepts a filter");
+
+    uint64_t copiedBytes = 0;
+    size_t   copiedFiles = 0;
+    for (const FileRecord& f : someJob.dests[0].files)
+        if (f.state == FileState::verified)
+        {
+            copiedBytes += f.size;
+            ++copiedFiles;
+        }
+    check(filteredFiles == copiedFiles, "the fit check counts the filtered file count (" +
+          std::to_string(filteredFiles) + " vs " + std::to_string(copiedFiles) + ")");
+    check(filteredBytes == copiedBytes, "the fit check counts the filtered bytes (" +
+          std::to_string(filteredBytes) + " vs " + std::to_string(copiedBytes) + ")");
+
+    uint64_t allBytes = 0;
+    size_t   allFiles = 0;
+    std::string allErr;
+    check(measureSource(s.source, "", allBytes, allFiles, allErr), "the unfiltered measurement succeeds");
+    check(allFiles > filteredFiles, "the filter really lowers the fit check's count (" +
+          std::to_string(filteredFiles) + " vs " + std::to_string(allFiles) + ")");
+
+    //a stray `*` excludes the entire card: that must be an error, never a
+    //successful run of nothing, or the card gets formatted on the strength of it
+    const Zstring destNone = s.dest("DEST_NONE");
+    createDirectoryIfMissingRecursion(destNone);
+    Options none = makeOptions(s, { destNone });
+    none.exclude = "*";
+    const JobReport noneJob = runJob(none);
+    check(!noneJob.error.empty(), "a filter that excludes everything is an error");
+    check(!allVerified(noneJob), "an all-excluded card does not verify");
+    check(noneJob.dests.empty() || noneJob.dests[0].files.empty(),
+          "an all-excluded card writes no file records");
+}
+
+
 int main()
 {
     std::cout << "ffsoffload tests\n\n";
@@ -1034,6 +1131,7 @@ int main()
     testBrokenFiles();
     testHashCache();
     testTruncatedReport();
+    testExcludeFilter();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
     if (failures > 0)

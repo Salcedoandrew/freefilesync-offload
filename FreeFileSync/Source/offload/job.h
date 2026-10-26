@@ -82,6 +82,9 @@ struct JobReport
 
     std::string verifyMode;
     HashAlgo hashAlgo = HashAlgo::xxh64;
+    //The Skip patterns this run applied, normalised, or empty. A report that does
+    //not record its own exclusions cannot answer "why is this clip missing?".
+    std::string exclude;
     std::string toolVersion;
     time_t startedAt = 0;
     time_t finishedAt = 0;

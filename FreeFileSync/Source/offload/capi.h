@@ -62,9 +62,12 @@ typedef struct
 
 //Starts one source -> destination transfer on its own thread and returns at once.
 //reportDir may be NULL (no reports) or a directory that already exists.
+//exclude is the Skip field's text, UTF-8, `|`-separated globs (see filter.h); NULL
+//or "" copies everything the junk rules allow.
 //Returns NULL if the source cannot be opened; offload_job_error() then explains why.
 OffloadJob* offload_job_start(const char* source, const char* dest, const char* reportDir,
-                              int32_t hashAlgo, int32_t verifyMode, int32_t dryRun);
+                              int32_t hashAlgo, int32_t verifyMode, int32_t dryRun,
+                              const char* exclude);
 
 //Copies the latest snapshot into *out. Safe to call from any thread, as often as
 //the caller likes; safe before and after the worker finishes.
@@ -88,9 +91,12 @@ void offload_job_cancel(OffloadJob* job); //finishes the file in flight, then st
 void offload_job_destroy(OffloadJob* job);
 
 //Bytes and file count a transfer from this folder would carry, using the engine's
-//own walk and junk rules. Returns 1 on success, 0 on failure (see
-//offload_measure_error). Worth calling on a background thread: it walks the tree.
-int32_t offload_source_measure(const char* source, uint64_t* outBytes, uint64_t* outFiles);
+//own walk, junk rules and Skip patterns. The filter matters: the fit check must
+//count what the job would copy, not what the card holds. Returns 1 on success, 0
+//on failure (see offload_measure_error). Worth calling off the main thread: it
+//walks the tree.
+int32_t offload_source_measure(const char* source, const char* exclude,
+                               uint64_t* outBytes, uint64_t* outFiles);
 
 //Why the last measure call on this thread failed, UTF-8. "" when it succeeded.
 const char* offload_measure_error(void);

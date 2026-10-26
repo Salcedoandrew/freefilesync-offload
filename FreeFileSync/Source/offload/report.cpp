@@ -34,33 +34,6 @@ std::string csvEscape(const std::string& s)
     return out + '"';
 }
 
-std::string jsonEscape(const std::string& s)
-{
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (unsigned char c : s)
-    {
-        switch (c)
-        {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (c < 0x20)
-                {
-                    char buf[7];
-                    std::snprintf(buf, sizeof buf, "\\u%04x", c);
-                    out += buf;
-                }
-                else
-                    out += static_cast<char>(c);
-        }
-    }
-    return out;
-}
-
 std::string xmlEscape(const std::string& s)
 {
     std::string out;
@@ -90,6 +63,36 @@ std::string writeRaw(const Zstring& path, const std::string& content)
     catch (const FileError& e) { return zen::utfTo<std::string>(e.toString()); }
 }
 } //namespace
+
+
+//Out of the anonymous namespace: the CLI's --json summary escapes its own
+//strings, and one escaper for both is the only way they cannot drift.
+std::string jsonEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s)
+    {
+        switch (c)
+        {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (c < 0x20)
+                {
+                    char buf[7];
+                    std::snprintf(buf, sizeof buf, "\\u%04x", c);
+                    out += buf;
+                }
+                else
+                    out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
 
 
 std::string toIso8601(time_t t)
@@ -152,6 +155,7 @@ std::string writeJson(const JobReport& job, const Zstring& filePath)
     out << "  \"source\": \"" << jsonEscape(zen::utfTo<std::string>(job.sourceRoot)) << "\",\n";
     out << "  \"verification\": \"" << jsonEscape(job.verifyMode) << "\",\n";
     out << "  \"hash_algorithm\": \"" << getAlgoName(job.hashAlgo) << "\",\n";
+    out << "  \"exclude\": \"" << jsonEscape(job.exclude) << "\",\n";
     out << "  \"started_at\": \"" << toIso8601(job.startedAt) << "\",\n";
     out << "  \"finished_at\": \"" << toIso8601(job.finishedAt) << "\",\n";
     out << "  \"cancelled\": " << (job.cancelled ? "true" : "false") << ",\n";

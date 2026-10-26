@@ -50,6 +50,8 @@ writes the record into the destination itself.
 | A refusal instead of a half copy | Source measured by the engine's own walk, destination free space checked before the first byte | `Backup 02 is 58.8 GB short` and **Add Transfer** disabled (screenshot 03) |
 | A receipt when it finishes | A confirmation window with the file count, the bytes moved and the rate each destination actually sustained | the window itself, and the same numbers in `report.csv` |
 | A card that is never modified | Files opened read-only, published through a temp file and rename, identical files skipped | source tree hashes are identical before and after a run |
+| Only the files you want | **Skip** patterns (`*.LRV \| MISC/`) applied by the same walk as the fit check, so the count on screen is the count that gets copied | the window's Skip field, or `--exclude` |
+| The folder you want, named | **Subfolder** takes `%Date%`, `%Year%`, `%Month%`, `%Day%` and `%Card%`; blank keeps the card's own name | the destination after a run, and the row's own label |
 | Staying current | **Check for Updates…** verifies the download against the release checksum, then replaces the app | `--update-test`, `--update-selftest <feed>` |
 
 ## Build from source
@@ -78,6 +80,9 @@ make zip        # Offload-<version>-macos-arm64.zip + its checksum
 ```bash
 ./ffsoffload /Volumes/CARD /Volumes/Backup1 /Volumes/Backup2 \
              --report ~/Desktop/offload-report --mhl
+
+# leave the proxies and the camera's own folders behind, and take a JSON summary
+./ffsoffload /Volumes/CARD /Volumes/Backup1 --exclude "*.LRV | *.THM | MISC/" --json
 ```
 
 ## Updates

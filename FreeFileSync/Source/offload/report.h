@@ -19,4 +19,8 @@ std::string writeMhl (const JobReport& job, const DestReport& dest, const Zstrin
 
 std::string toIso8601(time_t t);
 std::string humanBytes(uint64_t bytes);
+
+//Escapes a UTF-8 string for a JSON value. Shared with the CLI's --json summary so
+//the report file and the one-line summary cannot escape differently.
+std::string jsonEscape(const std::string& s);
 }

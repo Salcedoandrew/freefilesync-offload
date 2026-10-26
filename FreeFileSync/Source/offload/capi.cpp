@@ -108,7 +108,8 @@ const char* copyOut(const std::string& s)
 }
 
 
-extern "C" int32_t offload_source_measure(const char* source, uint64_t* outBytes, uint64_t* outFiles)
+extern "C" int32_t offload_source_measure(const char* source, const char* exclude,
+                                          uint64_t* outBytes, uint64_t* outFiles)
 {
     g_measureError.clear();
     if (!source || !*source)
@@ -120,7 +121,7 @@ extern "C" int32_t offload_source_measure(const char* source, uint64_t* outBytes
     uint64_t bytes = 0;
     size_t   files = 0;
     std::string err;
-    if (!offload::measureSource(Zstring(source), bytes, files, err))
+    if (!offload::measureSource(Zstring(source), exclude ? exclude : "", bytes, files, err))
     {
         g_measureError = err.empty() ? "cannot read the source folder" : err;
         return 0;
@@ -139,7 +140,8 @@ extern "C" const char* offload_measure_error(void)
 
 
 extern "C" OffloadJob* offload_job_start(const char* source, const char* dest, const char* reportDir,
-                                         int32_t hashAlgo, int32_t verifyMode, int32_t dryRun)
+                                         int32_t hashAlgo, int32_t verifyMode, int32_t dryRun,
+                                         const char* exclude)
 {
     if (!source || !*source || !dest || !*dest)
         return nullptr;
@@ -181,6 +183,7 @@ extern "C" OffloadJob* offload_job_start(const char* source, const char* dest, c
     job->opts.verify       = verifyMode == OFFLOAD_VERIFY_SIZE ? offload::VerifyMode::sizeOnly
                                                               : offload::VerifyMode::sourceAndDest;
     job->opts.dryRun       = dryRun != 0;
+    job->opts.exclude      = exclude ? exclude : "";
     job->opts.pause        = &job->pauseFlag;
     job->opts.cancel       = &job->cancelFlag;
     job->opts.onProgress   = [job](const offload::Progress& p) { job->publishProgress(p); };

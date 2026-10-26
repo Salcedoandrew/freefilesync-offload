@@ -54,7 +54,7 @@ afsFiles = \
 baseFiles = binary.cpp structures.cpp
 
 offloadFiles = \
-    hash.cpp engine.cpp report.cpp capi.cpp broken.cpp cache.cpp
+    hash.cpp engine.cpp report.cpp capi.cpp broken.cpp cache.cpp filter.cpp
 
 objs = $(addprefix build/zen_,$(zenFiles:.cpp=.o)) \
        $(addprefix build/afs_,$(afsFiles:.cpp=.o)) \
@@ -106,7 +106,14 @@ ffsoffload_tests: build/offload_tests.o $(objs) $(LIB)
 test: ffsoffload_tests
 	./ffsoffload_tests
 
-clean:
-	rm -rf build $(LIB) liboffloadapi.a ffsoffload ffsoffload_tests
+# The Skip matcher has no zen/glib/wx dependency, so it builds and runs on its own
+# in about a second. That is deliberate: it is the one piece that can be tested
+# anywhere, including on a Linux CI box.
+filter-test: offload/filter.cpp offload/filter_test.cpp
+	$(CXX) -std=c++17 -O2 -Wall -Wextra offload/filter.cpp offload/filter_test.cpp -o build_filter_test
+	./build_filter_test
 
-.PHONY: all test clean
+clean:
+	rm -rf build $(LIB) liboffloadapi.a ffsoffload ffsoffload_tests build_filter_test
+
+.PHONY: all test filter-test clean

@@ -9,6 +9,7 @@
 // *****************************************************************************
 
 #include "engine.h"
+#include "filter.h"
 #include "report.h"
 
 #include <zen/file_access.h>
@@ -84,6 +85,9 @@ void printUsage()
         "                      or 'size' (compare sizes only, much weaker)\n"
         "  --hash ALGO         xxh64 (default) | md5 | sha1 - used for verification\n"
         "                      and reported in the CSV/JSON/MHL\n"
+        "  --exclude PATTERNS  skip matching files and folders, '|'-separated:\n"
+        "                      \"*.LRV | *.THM | MISC/\" (* and ? wildcards, a\n"
+        "                      trailing / prunes a folder; case-insensitive)\n"
         "  --reverify          do not copy; hash what is already on the destinations\n"
         "                      and report mismatches\n"
         "  --dry-run           plan and report, write nothing\n"
@@ -109,6 +113,7 @@ struct Args
     bool quiet    = false;
     bool json     = false;
     HashAlgo hash = HashAlgo::xxh64;
+    std::string exclude;
     Zstring reportDir;
 };
 
@@ -147,6 +152,12 @@ bool parseArgs(int argc, char** argv, Args& out, std::string& err)
         }
         else if (a == "--reverify") out.reverify = true;
         else if (a == "--dry-run")  out.dryRun   = true;
+        else if (a == "--exclude")
+        {
+            Zstring patterns;
+            if (!next(patterns)) return false;
+            out.exclude = zen::utfTo<std::string>(patterns);
+        }
         else if (a == "--mhl")      out.writeMhl = true;
         else if (a == "--quiet")    out.quiet    = true;
         else if (a == "--json")     out.json     = true;
@@ -202,6 +213,7 @@ int main(int argc, char** argv)
     opts.verify     = args.verify;
     opts.hashAlgo   = args.hash;
     opts.dryRun     = args.dryRun;
+    opts.exclude    = args.exclude;
     opts.reverifyOnly = args.reverify;
     opts.cancel     = &g_cancel;
     opts.pause      = &g_pause;
@@ -238,7 +250,10 @@ int main(int argc, char** argv)
             std::cout << "dest    " << zen::utfTo<std::string>(d) << "\n";
         std::cout << "verify  " << getVerifyModeName(args.verify)
                   << (args.reverify ? " (re-verify only)" : "") << "\n";
-        std::cout << "hash    " << getAlgoName(args.hash) << "\n\n";
+        std::cout << "hash    " << getAlgoName(args.hash) << "\n";
+        if (!args.exclude.empty())
+            std::cout << "skip    " << ExcludeFilter::parse(args.exclude).text() << "\n";
+        std::cout << "\n";
     }
 
     size_t filesSeen = 0;
@@ -267,11 +282,48 @@ int main(int argc, char** argv)
 
     if (args.json)
     {
-        std::cout << "{\"ok\": " << (allVerified(job) ? "true" : "false")
-                  << ", \"files\": " << totalFiles(job)
-                  << ", \"seconds\": " << elapsed;
+        //One line a script can read without a parser for prose: the totals it would
+        //otherwise have to add up itself, the bytes that actually moved, where the
+        //report went, and the skip rules that shaped all of it.
+        uint64_t bytesCopied = 0;
+        size_t verified = 0;
+        size_t written = 0;
+        size_t skipped = 0;
+        size_t mismatched = 0;
+        size_t failed = 0;
+        size_t broken = 0;
         for (const DestReport& d : job.dests)
-            std::cout << ", \"" << destLabel(d.destRoot) << "\": {\"verified\": " << d.verified
+        {
+            bytesCopied += d.bytesCopied;
+            verified    += d.verified;
+            written     += d.filesWritten;
+            skipped     += d.skipped;
+            mismatched  += d.mismatched;
+            failed      += d.failed;
+            broken      += d.broken;
+        }
+
+        std::cout << "{\"ok\": " << (allVerified(job) ? "true" : "false")
+                  << ", \"source\": \"" << jsonEscape(zen::utfTo<std::string>(job.sourceRoot)) << "\""
+                  << ", \"files\": " << totalFiles(job)
+                  << ", \"verified\": " << verified
+                  << ", \"written\": " << written
+                  << ", \"skipped\": " << skipped
+                  << ", \"mismatch\": " << mismatched
+                  << ", \"failed\": " << failed
+                  << ", \"broken\": " << broken
+                  << ", \"bytes\": " << bytesCopied
+                  << ", \"seconds\": " << elapsed
+                  << ", \"verify\": \"" << jsonEscape(job.verifyMode) << "\""
+                  << ", \"hash\": \"" << getAlgoName(job.hashAlgo) << "\""
+                  << ", \"exclude\": \"" << jsonEscape(job.exclude) << "\""
+                  << ", \"dry_run\": " << (job.dryRun ? "true" : "false")
+                  << ", \"report\": \"" << jsonEscape(args.reportDir.empty()
+                                                     ? std::string()
+                                                     : zen::utfTo<std::string>(args.reportDir)) << "\""
+                  << ", \"error\": \"" << jsonEscape(job.error) << "\"";
+        for (const DestReport& d : job.dests)
+            std::cout << ", \"" << jsonEscape(destLabel(d.destRoot)) << "\": {\"verified\": " << d.verified
                       << ", \"written\": " << d.filesWritten << ", \"skipped\": " << d.skipped
                       << ", \"mismatch\": " << d.mismatched << ", \"failed\": " << d.failed
                       << ", \"broken\": " << d.broken
