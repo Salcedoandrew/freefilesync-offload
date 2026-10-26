@@ -35,6 +35,12 @@ jobs:
         working-directory: FreeFileSync/Source/offload/mac
         run: ./Offload --fit-test
 
+      # Version ordering, feed decoding, checksum parsing, and a real bundle
+      # swap on disk: the step that replaces the app must work before it ships.
+      - name: Update tests
+        working-directory: FreeFileSync/Source/offload/mac
+        run: ./Offload --update-test
+
       # End-to-end transfer through the real window code, on a fixture card.
       - name: App self-test
         working-directory: FreeFileSync/Source/offload/mac
