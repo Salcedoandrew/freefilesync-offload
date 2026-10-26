@@ -755,7 +755,10 @@ void testBrokenFiles()
     createDirectoryIfMissingRecursion(destA);
 
     const JobReport job = runJob(makeOptions(s, { destA }));
-    check(allVerified(job), "a run with broken files still verifies (broken is a warning, not a failure)");
+    //Damaged is copied faithfully but is never a verified-good copy, so the job
+    //cannot claim everything arrived: a corrupt JPEG is exactly what the report
+    //exists to catch before the card is reformatted.
+    check(!allVerified(job), "a run with broken files does not verify");
     check(job.dests[0].files.size() == 11, "eleven files enumerated");
     check(job.dests[0].broken == 6, "six broken files (got " + std::to_string(job.dests[0].broken) + ")");
     check(job.dests[0].verified == 5, "five verified-good files (got " + std::to_string(job.dests[0].verified) + ")");
@@ -964,6 +967,51 @@ void testHashCache()
 }
 
 
+//A destination that stops early leaves a prefix of records. A prefix with no
+//failures in it must not read as a completed job: that is how a half-copied card
+//gets reformatted.
+void testTruncatedReport()
+{
+    std::cout << "truncated report\n";
+
+    FileRecord rec;
+    rec.relPath = Zstr("DCIM/IMG_0001.JPG");
+    rec.size = 4096;
+    rec.state = FileState::verified;
+
+    JobReport job;
+    DestReport d;
+    d.destRoot = Zstr("/tmp/does-not-matter");
+    d.expectedFiles = 3;
+    d.files.push_back(rec);
+    tally(d);
+    job.dests.push_back(d);
+
+    check(d.failed == 0 && d.mismatched == 0, "the short report has no failures in it");
+    check(!allVerified(job), "one record of three does not verify");
+
+    //every record present, nothing failed: now it verifies
+    d.files.push_back(rec);
+    d.files.push_back(rec);
+    tally(d);
+    job.dests[0] = d;
+    check(allVerified(job), "a complete report verifies");
+
+    //a broken file blocks the claim even though nothing failed
+    d.files[0].broken = true;
+    tally(d);
+    job.dests[0] = d;
+    check(!allVerified(job), "a broken file blocks a complete report");
+
+    //a failed source scan is never a success, whatever the destinations hold
+    d.files[0].broken = false;
+    tally(d);
+    job.dests[0] = d;
+    job.error = "cannot read the source folder";
+    check(!allVerified(job), "a job-level error blocks the claim");
+}
+
+
 int main()
 {
     std::cout << "ffsoffload tests\n\n";
@@ -985,6 +1033,7 @@ int main()
     testBrokenHeaderUnits();
     testBrokenFiles();
     testHashCache();
+    testTruncatedReport();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
     if (failures > 0)

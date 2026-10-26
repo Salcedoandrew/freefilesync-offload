@@ -536,20 +536,25 @@ final class Updater: ObservableObject
                 throw UpdateError.downloadFailed("HTTP \(http.statusCode)")
             }
 
-            //the checksum, if the release publishes one
-            if let sumsAsset = release.sums
+            //The checksum, always. A release that does not publish one cannot be
+            //verified, and an update that cannot be verified must not replace the
+            //installed app — the whole point of the check is that a byte of
+            //difference stops here, which it cannot do if the check is optional.
+            guard let sumsAsset = release.sums else { throw UpdateError.checksumMissing }
+            let (sumsFile, sumsResponse) = try await download(sumsAsset, into: work)
+            if let http = sumsResponse as? HTTPURLResponse, http.statusCode != 200
             {
-                let (sumsFile, _) = try await download(sumsAsset, into: work)
-                let text = (try? String(contentsOf: sumsFile, encoding: .utf8)) ?? ""
-                guard let expected = Checksum.parse(text)[release.zip.name.lowercased()] else
-                {
-                    throw UpdateError.checksumMissing
-                }
-                let got = try Checksum.sha256(of: zip)
-                guard got == expected else
-                {
-                    throw UpdateError.checksumMismatch(expected: expected, got: got)
-                }
+                throw UpdateError.downloadFailed("checksum file: HTTP \(http.statusCode)")
+            }
+            let text = (try? String(contentsOf: sumsFile, encoding: .utf8)) ?? ""
+            guard let expected = Checksum.parse(text)[release.zip.name.lowercased()] else
+            {
+                throw UpdateError.checksumMissing
+            }
+            let got = try Checksum.sha256(of: zip)
+            guard got == expected else
+            {
+                throw UpdateError.checksumMismatch(expected: expected, got: got)
             }
 
             phase = .installing(release)

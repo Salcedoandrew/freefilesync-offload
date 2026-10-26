@@ -125,6 +125,19 @@ enum Format
             : String(format: "%.1f %@", tenths, units[unit])
     }
 
+    private static let grouped: NumberFormatter =
+    {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        return f
+    }()
+
+    ///1284 -> "1,284", so a card's file count stays readable at a glance.
+    static func number(_ value: UInt64) -> String
+    {
+        grouped.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
     static func rate(_ bytesPerSecond: Double) -> String
     {
         guard bytesPerSecond.isFinite, bytesPerSecond > 0 else { return "—" }
@@ -176,8 +189,13 @@ final class Transfer: ObservableObject, Identifiable
     @Published var bytesTotal: UInt64 = 0
     @Published var reportPath: String = ""
     @Published var errorText: String = ""
+    ///Files per second, smoothed the same way as the byte rate.
+    @Published var filesPerSecond: Double = 0
+    ///Seconds the engine has spent on this transfer, as it reports them.
+    @Published var elapsedSeconds: Double = 0
 
     private var lastBytes: UInt64 = 0
+    private var lastFiles: UInt64 = 0
     private var lastTime = Date()
     private var sawFinish = false
 
@@ -221,6 +239,52 @@ final class Transfer: ObservableObject, Identifiable
         }
     }
 
+    ///"42%" — what the row shows on the right while it is working.
+    var percentText: String
+    {
+        "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
+    }
+
+    ///The stats line: how fast it is going and how much has moved.
+    ///`1.03 GB/sec · 3.2 files/sec · 412 of 1,284 files · 8.2 GB of 21.4 GB · about 12 sec left`
+    var statsText: String
+    {
+        //a paused row keeps its counts but drops the rate and the ETA: both are
+        //frozen at whatever they were when it stopped, and a frozen "536 MB/sec"
+        //reads as though it were still moving
+        let live = (phase == .copying || phase == .verifying) && !paused
+        var parts: [String] = []
+
+        if live
+        {
+            if bytesPerSecond > 1 { parts.append(Format.rate(bytesPerSecond)) }
+            if filesPerSecond > 0.05 { parts.append(String(format: "%.1f files/sec", filesPerSecond)) }
+        }
+
+        if filesTotal > 0 || filesDone > 0
+        {
+            parts.append("\(Format.number(filesDone)) of \(Format.number(filesTotal)) files")
+        }
+
+        if bytesTotal > 0
+        {
+            parts.append("\(Format.capacity(bytesDone)) of \(Format.capacity(bytesTotal))")
+        }
+
+        if live
+        {
+            let eta = Format.duration(etaSeconds)
+            if !eta.isEmpty { parts.append("about \(eta) left") }
+        }
+        else if phase == .done
+        {
+            let took = Format.duration(elapsedSeconds)
+            if !took.isEmpty { parts.append("in \(took)") }
+        }
+
+        return parts.joined(separator: " · ")
+    }
+
     //Colour of the bar fill, following the same semantics the CLI reports.
     var barColors: [Color]
     {
@@ -245,6 +309,7 @@ final class Transfer: ObservableObject, Identifiable
         filesTotal = raw.filesTotal
         verifiedCount = raw.verifiedCount
         failedCount   = raw.failedCount
+        elapsedSeconds = raw.elapsedSeconds
         paused        = raw.phase != Int32(OFFLOAD_PHASE_DONE) && job.isPaused
 
 
@@ -274,6 +339,17 @@ final class Transfer: ObservableObject, Identifiable
             bytesPerSecond = bytesPerSecond == 0 ? instant : bytesPerSecond * 0.7 + instant * 0.3
             lastBytes = raw.bytesDone
             lastTime = now
+
+            //items/sec, from the same samples: a 92 GB card takes long enough that
+            //"412 of 1,284 files" alone cannot tell you whether it is moving
+            if raw.filesDone >= lastFiles
+            {
+                let instantFiles = Double(raw.filesDone - lastFiles) / dt
+                filesPerSecond = filesPerSecond == 0 ? instantFiles
+                                                     : filesPerSecond * 0.7 + instantFiles * 0.3
+                lastFiles = raw.filesDone
+            }
+
             if bytesPerSecond > 1_000
             {
                 let remaining = raw.bytesTotal > raw.bytesDone ? Double(raw.bytesTotal - raw.bytesDone) : 0
@@ -296,11 +372,29 @@ final class Transfer: ObservableObject, Identifiable
             }
             else if raw.ok == 0
             {
-                //A failed source scan leaves no per-file record behind, so
-                //failedCount and errorText are both empty — but the engine still
-                //says the job did not verify. Never show green for that.
+                //The engine says this job did not verify, and it is never wrong about
+                //that. Three different things land here and each needs its own
+                //sentence, because "failed" with the wrong reason is worse than no
+                //reason at all.
                 phase = .failed
-                if errorText.isEmpty { errorText = "the source could not be read" }
+                if errorText.isEmpty
+                {
+                    if raw.brokenCount > 0
+                    {
+                        let n = raw.brokenCount
+                        errorText = n == 1
+                            ? "1 damaged file on the source was copied but not verified"
+                            : "\(n) damaged files on the source were copied but not verified"
+                    }
+                    else if raw.fileCount > 0 && raw.fileCount < raw.filesTotal
+                    {
+                        errorText = "the transfer stopped early: the report is incomplete"
+                    }
+                    else
+                    {
+                        errorText = "the source could not be read"
+                    }
+                }
             }
             else
             {

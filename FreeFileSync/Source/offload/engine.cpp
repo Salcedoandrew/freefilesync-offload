@@ -648,11 +648,25 @@ void tally(DestReport& dest)
 
 bool allVerified(const JobReport& job)
 {
+    //a source that could not be walked never verifies, even if a caller built the
+    //report by hand
+    if (!job.error.empty())
+        return false;
     if (job.dests.empty())
         return false;
     for (const DestReport& d : job.dests)
     {
         if (d.failed > 0 || d.mismatched > 0)
+            return false;
+        //Every source file must have produced exactly one record here. A worker
+        //that died mid-run leaves a prefix of records; a prefix with no failures
+        //must never read as "everything arrived", or a half-copied card looks
+        //like a finished one.
+        if (d.files.size() != d.expectedFiles)
+            return false;
+        //A damaged source file is copied faithfully, but it is not a verified-good
+        //copy: the job cannot claim every file verified while one of them is broken.
+        if (d.broken > 0)
             return false;
     }
     return true;
@@ -751,7 +765,11 @@ JobReport runJob(const Options& opts)
 
     job.dests.resize(opts.destRoots.size());
     for (size_t i = 0; i < opts.destRoots.size(); ++i)
+    {
         job.dests[i].destRoot = opts.destRoots[i];
+        //pinned before the workers start, so a short report can be recognised
+        job.dests[i].expectedFiles = source.size();
+    }
 
     //one worker per destination: a slow drive must not throttle a fast one
     const size_t workerCount = std::min(opts.destRoots.size(), std::max<size_t>(opts.maxDestinations, 1));

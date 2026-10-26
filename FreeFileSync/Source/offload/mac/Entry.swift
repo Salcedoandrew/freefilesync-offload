@@ -179,6 +179,14 @@ func makeUITestFixture(fileCount: Int = 8, fileBytes: Int = 6_000_000) -> UITest
         {
             var bytes = [UInt8](repeating: 0, count: fileBytes)
             for j in bytes.indices { bytes[j] = UInt8.random(in: 0...255) }
+            //A real CR3 header — box size, "ftyp", brand "crx " — in front of the
+            //random payload. The engine judges file heads during the scan, so a
+            //file named .CR3 whose head is noise is a damaged file: it still copies,
+            //but it can no longer be counted as verified, and this fixture exists to
+            //exercise the transfer path, not the damaged-file path.
+            let cr3Header: [UInt8] = [0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
+                                      0x63, 0x72, 0x78, 0x20]
+            for (k, b) in cr3Header.enumerated() where k < bytes.count { bytes[k] = b }
             try Data(bytes).write(to: URL(fileURLWithPath: "\(card)/DCIM/IMG_\(1000 + i).CR3"))
         }
     }

@@ -56,6 +56,11 @@ struct DestReport
     Zstring destRoot;
     std::vector<FileRecord> files;
 
+    //How many file records this destination must account for: the source file
+    //count, fixed before any worker starts. A report holding fewer is truncated,
+    //and a truncated report is not a success however clean its counters look.
+    size_t expectedFiles = 0;
+
     size_t copied = 0;
     size_t skipped = 0;
     size_t verified = 0;   //hash-confirmed copies; broken files are never counted here

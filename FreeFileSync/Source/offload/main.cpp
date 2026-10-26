@@ -310,7 +310,27 @@ int main(int argc, char** argv)
         //above at all: print the reason here instead of a bare "FAILED".
         if (!job.error.empty())
             std::cout << "  ERROR: " << job.error << "\n";
-        std::cout << (allVerified(job) ? "OK: every file verified\n" : "FAILED: see failures above\n");
+
+        //Say which kind of failure this was. "See failures above" is a lie when the
+        //only problem is a damaged source file (the file was copied, so no FAIL line
+        //exists) or a destination that stopped early (there is no line at all).
+        size_t failedTotal = 0;
+        size_t brokenTotal = 0;
+        for (const DestReport& d : job.dests)
+        {
+            failedTotal += d.failed + d.mismatched;
+            brokenTotal += d.broken;
+        }
+
+        if (allVerified(job))
+            std::cout << "OK: every file verified\n";
+        else if (failedTotal > 0)
+            std::cout << "FAILED: see failures above\n";
+        else if (brokenTotal > 0)
+            std::cout << "FAILED: " << brokenTotal
+                      << " damaged source file(s) were copied but never counted as verified\n";
+        else
+            std::cout << "FAILED: a destination stopped early, so the report is incomplete\n";
         std::cout << "elapsed " << elapsed << " s for " << totalFiles(job) << " file copies\n";
     }
 

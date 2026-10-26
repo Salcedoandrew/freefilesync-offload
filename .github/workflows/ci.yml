@@ -46,5 +46,10 @@ jobs:
         working-directory: FreeFileSync/Source/offload/mac
         run: |
           mkdir -p /tmp/ffs-ci/card/DCIM /tmp/ffs-ci/dest
-          head -c 1000000 /dev/urandom > /tmp/ffs-ci/card/DCIM/IMG_0001.CR3
+          # A real CR3 header (box size, "ftyp", brand "crx ") then a random
+          # payload. A .CR3 of pure noise is a damaged file: it copies, but it
+          # cannot be counted as verified, so it would fail this test instead of
+          # exercising the transfer path.
+          printf '\x00\x00\x00\x18ftypcrx ' > /tmp/ffs-ci/card/DCIM/IMG_0001.CR3
+          head -c 1000000 /dev/urandom >> /tmp/ffs-ci/card/DCIM/IMG_0001.CR3
           ./Offload --self-test /tmp/ffs-ci/card /tmp/ffs-ci/dest
