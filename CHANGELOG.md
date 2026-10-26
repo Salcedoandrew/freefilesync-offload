@@ -39,6 +39,32 @@ nothing here is upstreamed (upstream is a read-only mirror).
   process, which is why the test needs Accessibility permission for the app that runs it.
 - Still untested: dragging a card in from Finder.
 
+### Packaged
+- **`make bundle` / `bundle-dylibs.sh`**: the binary linked Homebrew's wx, glib, gettext,
+  pcre2 and LLVM `libc++` by absolute path, so the app only ran on the machine that built
+  it. The script walks the load commands, copies 25 dylibs into `Contents/Frameworks`,
+  rewrites them to `@rpath`, and re-signs inside-out. wx publishes each library under three
+  symlink names and images reference different links in the chain, so copies are deduped by
+  file (`stat -L`, since macOS `stat` is `lstat` by default) — without that the same code
+  was bundled twice under two install names.
+- **`make zip`**: `Offload-0.4.0-macos-arm64.zip`, 6.5 MB, containing the app, a
+  `HOW-TO-OPEN.txt` and nothing else.
+- `Info.plist` said `0.2.0` while the changelog shipped 0.4.0; it now says 0.4.0.
+
+### Verified on the packaged build
+- Unzipped to `/tmp` and run from there: `11/11 fit checks`, `self-test PASS` (3 files,
+  two destinations, 3/3 verified on each), window renders 1800×1132.
+- `DYLD_PRINT_LIBRARIES` shows every image loading from `Offload.app/Contents/Frameworks`;
+  `otool -L` across the bundle has no `/opt/homebrew` or `/tmp` path left.
+- `codesign --verify --deep --strict`: valid; `Signature=adhoc`, `TeamIdentifier=not set`.
+- `spctl -a` on a quarantined copy: **rejected** — expected for an ad-hoc signature with no
+  Developer ID and no notarization. The archive says so in `HOW-TO-OPEN.txt`, and
+  right-click → Open clears it. Notarizing is the only thing that removes the prompt, and
+  that needs an Apple Developer Program membership, which this machine has no certificate
+  for (`security find-identity -v -p codesigning` → 0 valid identities).
+- arm64 only: the engine and its Homebrew dependencies are arm64, so a universal build
+  would need an x86_64 dependency set that does not exist here.
+
 ---
 
 ## 0.3.1 — 2026-10-25

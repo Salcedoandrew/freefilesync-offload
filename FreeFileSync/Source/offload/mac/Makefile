@@ -1,6 +1,8 @@
 # macOS app for Offload mode.
 #
 #   make            build Offload.app (arm64, ad-hoc signed)
+#   make bundle     build it self-contained: third-party dylibs inside
+#   make zip        bundle and package the release archive for a downloader
 #   make run        build and open it
 #   make screenshot render the window offscreen to offload-window.png
 #   make clean
@@ -15,6 +17,8 @@ SDK        := $(shell xcrun --show-sdk-path)
 ARCH       := $(shell uname -m)
 TARGET     := $(ARCH)-apple-macos13.0
 BREW_LLVM  := $(shell brew --prefix llvm 2>/dev/null)
+VERSION    := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+ARCHIVE    := Offload-$(VERSION)-macos-$(ARCH).zip
 
 SOURCES := Entry.swift Theme.swift Engine.swift Model.swift Views.swift Demo.swift UITest.swift
 
@@ -43,6 +47,23 @@ Offload.app: Offload Info.plist
 run: Offload.app
 	open Offload.app
 
+# Copies wx, glib, gettext, pcre2 and LLVM libc++ into Contents/Frameworks and
+# rewrites the load commands, so the app does not need Homebrew on the machine
+# that runs it. Ad-hoc signs last (the script does it).
+bundle:
+	rm -rf Offload.app
+	$(MAKE) Offload.app
+	./bundle-dylibs.sh Offload.app
+
+# What a downloader gets: the bundle, a note about Gatekeeper, and a checksum.
+zip: bundle
+	rm -rf dist $(ARCHIVE)
+	mkdir -p dist
+	cp -R Offload.app dist/
+	cp HOW-TO-OPEN.txt dist/
+	ditto -c -k --sequesterRsrc dist $(ARCHIVE)
+	@shasum -a 256 $(ARCHIVE)
+
 screenshot: Offload
 	./Offload --render offload-window.png
 
@@ -68,4 +89,4 @@ test: Offload
 clean:
 	rm -rf Offload Offload.app clickdriver offload-window*.png
 
-.PHONY: all run screenshot test ui-test clickdriver clean
+.PHONY: all run bundle zip screenshot test ui-test clickdriver clean

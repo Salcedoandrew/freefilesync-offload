@@ -1,0 +1,68 @@
+Offload 0.4.0 - macOS app for copying camera cards to several drives at once
+=============================================================================
+
+Requires: macOS 13 or newer, Apple silicon (arm64). Intel Macs are not
+supported by this build.
+
+There is nothing to install and nothing to configure. The app carries its own
+libraries, so it does not need Homebrew, wxWidgets, Xcode or the command line
+tools on the machine that runs it.
+
+
+Install
+-------
+1. Unzip the download.
+2. Drag Offload.app to /Applications (or run it from wherever you unzipped it).
+3. First launch: right-click the app, choose Open, then Open again in the
+   dialog. Doing this once is enough for that copy of the app.
+
+
+Why the warning appears
+-----------------------
+This build is ad-hoc signed. That is a real, valid code signature - macOS
+verifies it, and the bundle you downloaded is intact - but it is not issued by
+an Apple Developer ID, and the app has not been notarized by Apple. Gatekeeper
+therefore treats a quarantined download the way it treats any app from an
+unidentified developer and asks you to confirm once.
+
+If you prefer not to click through the dialog, this is the same thing the
+dialog does, stated as a command:
+
+    xattr -d com.apple.quarantine /Applications/Offload.app
+
+Check the download before you run it:
+
+    shasum -a 256 Offload-0.4.0-macos-arm64.zip
+
+and compare against the checksum published on the release page.
+
+
+What it does
+------------
+- Drag a card or folder onto the left side, one or more destination drives onto
+  the right, then Add Transfer.
+- Every file is copied to every destination, hashed while it is written
+  (XXH64 by default; MD5 and SHA-1 selectable), then read back from each drive
+  and compared against the source.
+- A destination that cannot hold the card is refused before anything is
+  written; the warning names the shortfall.
+- Pause, resume and cancel per job; per-file state (copied, verified, failed)
+  and a summary at the end.
+- Each job writes a CSV report and an ASC MHL manifest into the destination, so
+  the record of what was copied travels with the copy.
+- Source files are only ever read. Identical files already on a destination are
+  skipped rather than rewritten.
+
+
+Uninstall
+---------
+Delete Offload.app. It writes nothing outside the destinations you choose and
+its own reports; there is no daemon, no login item and no hidden state.
+
+
+Known limitations in 0.4.0
+--------------------------
+- No resume journal: if a job is interrupted, it restarts that file rather than
+  resuming mid-file.
+- Not notarized; see "Why the warning appears" above.
+- The app is arm64 only.

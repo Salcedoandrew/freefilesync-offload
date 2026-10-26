@@ -10,6 +10,24 @@ full history of what this fork changes.
 
 ![The Offload window](docs/offload/screenshots/offload-window.png)
 
+## Download
+
+The latest build is on the [releases page](https://github.com/Salcedoandrew/freefilesync-offload/releases):
+`Offload-0.4.0-macos-arm64.zip` (6.5 MB). macOS 13 or newer, Apple silicon.
+It carries its own libraries, so **Homebrew is not needed on the machine that runs it** —
+only on the machine that builds it.
+
+```bash
+curl -LO https://github.com/Salcedoandrew/freefilesync-offload/releases/download/v0.4.0/Offload-0.4.0-macos-arm64.zip
+shasum -a 256 Offload-0.4.0-macos-arm64.zip     # compare with the release page
+open Offload-0.4.0-macos-arm64.zip              # or: ditto -x -k <zip> .
+```
+
+The build is **ad-hoc signed**, not notarized: `codesign --verify` passes, but Gatekeeper
+still asks once on first launch of a downloaded copy (right-click → Open, or
+`xattr -d com.apple.quarantine Offload.app`). `HOW-TO-OPEN.txt` inside the archive says the
+same thing. Details and the limitations are in the release notes.
+
 ## What works today
 
 - **Sources | Transfers | Destinations**, dark, one window. Drop a card or drive on either
@@ -37,6 +55,8 @@ make -f Makefile.macos liboffloadapi.a ffsoffload ffsoffload_tests
 ./ffsoffload --help                      # the headless engine
 cd offload/mac
 make                                     # Offload.app (arm64, ad-hoc signed)
+make bundle                              # ...with wx/glib/libc++ inside Contents/Frameworks
+make zip                                 # the release archive + checksum
 open Offload.app
 ```
 
