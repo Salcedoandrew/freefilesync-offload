@@ -223,6 +223,13 @@ presets, HTML report and a proper app icon (the last two leftover from Phase 3),
 S3/SFTP destinations — the `afs` layer would give SFTP nearly free, but it is not a
 wedding-card problem.
 
+**18. About box: show who made it.** The About Offload menu item already opens the
+standard panel (`orderFrontStandardAboutPanel`); it just has nothing of Andrew's in
+it yet. Fill it via `NSHumanReadableCopyright` in Info.plist plus a `Credits.rtf`
+in the bundle: Andrew Salcedo / Andrew Salcedo Photography / Heartfelt Media,
+heartfeltmedia.co, booking link, and gcastroandrew@gmail.com. Small: a plist key, a
+text file, and a line in the Makefile so the bundle step copies it into Resources.
+
 ### Correction — main moved past this audit
 
 This entry judged `81cb7b9`. While it was being written, two commits landed on main,
