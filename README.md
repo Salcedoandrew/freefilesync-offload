@@ -169,6 +169,183 @@ yourself at the commit you mean to release). A `v*` tag pushed by hand still wor
 version is skipped, and re-running the workflow from the Actions tab rebuilds it and
 uploads over the existing assets instead of failing.
 
+## Upstream features
+
+What FreeFileSync 14.12 itself does, feature by feature — read out of the shipped
+Linux binary by static analysis (REA + Ghidra, October 2026), so this fork can be
+compared against it without re-running the analysis. The GUI was never run and the
+binary was not modified. The raw notes and decompiles behind this list are kept
+with the analysis, not in the repo.
+
+The engine is a three-phase pipeline: **compare** → **plan** → **execute**.
+`fff::synchronize(...)` is the entry point; `FolderPairSyncer` walks both trees and
+decides each file pair's fate; `ComparisonBuffer` runs the comparison;
+`DeletionHandler` deletes with progress; `fff::applyVersioningLimit` caps kept
+versions. Backends are the AFS layer (local, Google Drive, FTP, SFTP) over
+statically linked libcurl / libssh2 / OpenSSL.
+
+Each feature has a stable ID. Evidence means how strong the claim is:
+`decompiled` — the function was decompiled, behaviour confirmed;
+`named` — the class/function name survives in the binary, body not decompiled;
+`string` — only a config key or UI string was found, so the feature is inferred,
+not proven.
+
+### 1. Sync modes
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| SYNC-01 | Two-Way sync | Syncs changes in both directions; each side can create, update and delete | `SyncVariant` enum; `sync_twoway` string (data table); `TwoWay` | `TwoWay` | string |
+| SYNC-02 | Mirror sync | Makes the target an exact copy of the source (deletes extras on the target) | `SyncVariant` enum; `sync_mirror` string (data table); `Mirror` | `Mirror` | string |
+| SYNC-03 | Update sync | Copies new/changed files one way only; never deletes | `SyncVariant` enum; `sync_update` string (data table) | — | string |
+| SYNC-04 | Custom directions | Per-folder-pair overrides: each side's create/update/delete behaviour set individually | `CustomDirections`; `FolderPairSyncCfg`; per-pair config function | `CustomDirections`, `Create`, `Update`, `Delete`, `LeftOnly`, `LeftNewer`, `RightOnly`, `RightNewer` | decompiled |
+| SYNC-05 | Multiple folder pairs | One config holds several left/right folder pairs synced in one run | `FolderPairSyncCfg` vector; `BaseFolderPair`; `FolderPairs` | `FolderPairs`, `FolderPairsMax`, `MaxFolderPairsShown` | named |
+| SYNC-06 | Dependent folder pairs | Pairs whose base folders depend on each other; warned about, not silently run | Warning keys only (see SAFE-02) | `WarnDependentFolderPair`, `WarnDependentBaseFolders` | string |
+| SYNC-07 | Sync operations (8-way) | Every file pair gets one operation: create, update, delete or move, on the left or right side | Sync-operation dispatcher; enums `so_create_left/right`, `so_update_left/right`, `so_delete_left/right`, `so_move_left/right` | `so_create_left`, `so_create_right`, `so_update_left`, `so_update_right`, `so_delete_left`, `so_delete_right`, `so_move_left`, `so_move_right` | decompiled |
+
+### 2. Comparison
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| CMP-01 | Compare by file time and size | Default comparison: size plus modification time decides whether a file differs | `CompareVariant` enum; `FileTimeTolerance` | `FileTimeTolerance`, `Compare` | string |
+| CMP-02 | Compare by file content | Byte-by-byte content comparison instead of time/size | `ComparisonBuffer::compareByContent`; `categorizeFileByContent` | — | named |
+| CMP-03 | File-time tolerance | Ignores modification-time differences smaller than N seconds (FAT/exFAT clock skew) | Setting key only | `FileTimeTolerance` | string |
+| CMP-04 | Sync-state database | Remembers the last synced state per folder pair, so moved/renamed files and deletions can be detected across runs | `loadLastSynchronousState`, `saveLastSynchronousState`; `database` string in the dispatcher | `database` | named |
+| CMP-05 | Categorise by content | After a content check, sorts a file pair into its sync category | `categorizeFileByContent` | — | named |
+| CMP-06 | Parallel folder status | Reads folder status in parallel across pairs/filesystems | `getFolderStatusParallel`; `massParallelExecute` | `Threads` | named |
+
+### 3. Moved files, deletion, versioning
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| MOVE-01 | Detect moved files | A file moved/renamed on one side is moved (not re-copied + deleted) on the other | `DetectMovedFiles`; sync-run setup | `DetectMovedFiles` | decompiled |
+| DEL-01 | Delete to recycle bin | Deleted files go to the OS recycle bin / trash instead of vanishing | `delete_recycler`; `RecycleBin`; `GdriveFileSystem::createRecyclerSession` (Drive trash); `gdriveMoveToTrash` | `delete_recycler`, `RecycleBin`, `Retain deleted and overwritten files in the recycle bin` | decompiled |
+| DEL-02 | Delete to versioning folder | Deleted/overwritten files are kept as timestamped old versions | `delete_versioning`; `FileVersioner` (see VER-01) | `delete_versioning`, `VersioningFolder` | decompiled |
+| DEL-03 | Delete permanently | Deleted files are removed with no recovery copy | `delete_permanently`; `Delete and overwrite files permanently` | `delete_permanently`, `Permanent` | decompiled |
+| DEL-04 | Delete Items confirmation dialog | Shows the items about to be deleted and asks before deleting | "Delete Items" wxWidgets dialog constructor | `delete_recycler` | decompiled |
+| DEL-05 | Delete files on one side | Deletes selected files on the left or right side only | `deleteFilesOneSide<LEFT/RIGHT>` | `DeleteLeft`, `DeleteRight` | named |
+| DEL-06 | Deletion cleanup | Removes leftover temp/versioning data after a sync | `DeletionHandler::tryCleanup` | — | named |
+| VER-01 | Versioning, timestamped folder | Old versions are stored in a folder named with a timestamp | `FileVersioner::revisionFolderImpl`; `TimeStamp-Folder`; format `YYYY-MM-DD hhmmss` | `VersioningFolder`, `TimeStamp-Folder`, `Versioning`, `Style` | decompiled |
+| VER-02 | Versioning, timestamped file | Old versions are stored as timestamped file names instead of a folder | `FileVersioner::revisionFolderImpl`; `TimeStamp-File` | `TimeStamp-File`, `Versioning` | decompiled |
+| VER-03 | Versioning limits | Caps how many old versions are kept, by count and by age | `fff::applyVersioningLimit`; `VersioningLimitFolder` set | `MinCount`, `MaxCount`, `MaxAge` | named |
+
+### 4. Filters
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| FILT-01 | Include / exclude filters | File-name patterns that include or exclude files from sync | `FilterConfig` (held by `ConfigDialog`); `DefaultFilter` | `Filter`, `DefaultFilter`, `Excluded` | named |
+| FILT-02 | View filters (action) | In the results grid, show/hide rows by the action that will be taken (10 toggles) | `TreeView::applyActionFilter` (10 bool toggles) | `DefaultViewFilter` | named |
+| FILT-03 | View filters (difference) | In the results grid, show/hide rows by difference category (8 toggles) | `TreeView::applyDifferenceFilter` (8 bool toggles) | `DefaultViewFilter` | named |
+| FILT-04 | Filter conditions | Per-pair filter condition evaluated during sync setup | `Condition` (in sync-run setup) | `Condition`, `Custom` | decompiled |
+| FILT-05 | Case sensitivity | Filter matching can be case-sensitive or not | Setting key only | `CaseSensitive` | string |
+
+### 5. File handling during copy
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| FILE-01 | Symlink handling | Symlinks are copied/compared as links, not followed and duplicated; link targets are read and compared | `getSymlinkContentImpl`; `copySymlinkForSameAfsType`; `equalSymlinkContentForSameAfsType`; `GetSymlinkTarget` task | — | named |
+| FILE-02 | Copy file permissions | Preserves Unix permissions on copied files | Setting key only | `CopyFilePermissions` | string |
+| FILE-03 | Copy locked files | Copies files that are open/locked by another process | Setting key only | `CopyLockedFiles` | string |
+| FILE-04 | Fail-safe file copy | Copies via a temp file and renames into place, so a crash cannot leave a partial file at the final name | Setting key only (name implies temp+rename; mechanism not decompiled) | `FailSafeFileCopy` | string |
+| FILE-05 | Verify copied files | Re-reads copied files and verifies them after the copy | Setting key only | `VerifyCopiedFiles` | string |
+| FILE-06 | Temp-file buffer | Stages temp files during copy | `TempFileBuffer::createTempFiles` | — | named |
+| FILE-07 | Copy with progress + retry | Copies report per-chunk progress and retry on failure | `FolderPairSyncer::copyFileWithCallback` (lambdas: per-chunk callback, retry path) | — | named |
+| FILE-08 | Overwrite-if-exists control | Controls whether an existing target file is overwritten | Setting key only | `OverwriteIfExists` | string |
+
+### 6. Backends / locations (AFS — AbstractFileSystem)
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| BACK-01 | Local filesystem | Syncs local folders and mounted volumes | Native AFS backend; `removeDirectoryImpl`, `getItemTypeIfExistsImpl` | — | named |
+| BACK-02 | Google Drive | Syncs with Google Drive: My Drive, shared drives, starred folders, shortcuts, trash, free-space query | `GdriveFileSystem` (full op set: `createFolderPlain`, `removeItemPlainImpl`, `copyFileForSameAfsType`, `copySymlinkForSameAfsType`, `moveAndRenameItemForSameAfsType`, `getFreeDiskSpace`, `createRecyclerSession`); `GdrivePersistentSessions` (accounts/sessions); `getSharedDrives`, `getStarredFolders`, `gdriveCreateShortcutPlain`, `gdriveMoveToTrash`, `gdriveRevokeAccess`, `gdriveRefreshAccess`, `gdriveExchangeAuthCode`, `getChangesDelta`, `getChangesCurrentToken`, `getMyDriveId`, `getGdriveUser` | — | named |
+| BACK-03 | FTP | Syncs with FTP servers (upload/download, directory listing, symlinks) | `FtpFileSystem` (full op set incl. `moveAndRenameItemForSameAfsType`); `FtpDirectoryReader::execute`; `ftpFileUpload`, `ftpFileDownload`; `InputStreamFtp`, `OutputStreamFtp` | `FtpLogin` | named |
+| BACK-04 | SFTP | Syncs with SFTP/SSH servers, with key-file auth and a state-machine traverser | `SftpFileSystem` (full op set incl. `getServerRealPath`, `copySymlinkForSameAfsType`); `SftpTraverser::TraverserStateMachine`; `SshSession::addSftpChannel`; `InputStreamSftp`, `OutputStreamSftp` | `SftpKeyFile` | named |
+| BACK-05 | Cloud folder picker | Browse and pick cloud folders from the GUI; detect server channel limits | `CloudSetupDlg::onBrowseCloudFolder`, `onDetectServerChannelLimit`; `AbstractFolderPickerDlg` (tree navigation, expand, navigate-to-path) | — | named |
+| BACK-06 | Network stack | HTTP(S) via libcurl, SSH via libssh2, TLS via OpenSSL — all statically linked | libcurl + libssh2 + OpenSSL 4.0.2; `googleHttpsRequest` | — | named |
+
+### 7. Parallelism and performance
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| PERF-01 | Configurable thread count | How many files are copied/compared in parallel | `Threads` setting, read in per-pair config | `Threads` | decompiled |
+| PERF-02 | Mass parallel execution | Runs copy/compare work items across a thread pool, per filesystem | `massParallelExecute`; `TaskScheduler<TravContext, GetDirContent, GetItemDetails, GetSymlinkTarget>` (and `GetDirDetails`/`GetLinkTargetDetails` variants) | — | named |
+| PERF-03 | Background priority | Runs the sync at low OS priority so the machine stays responsive | Setting key only | `RunWithBackgroundPriority` | string |
+| PERF-04 | Five-pass folder walk | Folder-pair sync builds its work list in 5 passes | `FolderPairSyncer::getFolderLevelWorkItems` (5 lambdas = 5 passes) | — | named |
+
+### 8. Batch mode and automation
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| BATCH-01 | Batch mode (headless sync) | Runs a saved sync config without the GUI | `Application::runBatchMode`; `FfsBatchConfig` | — | named |
+| BATCH-02 | Batch status handling | Progress/error reporting and result display for batch runs | `BatchStatusHandler` (incl. `reportError`, `showResult`); `StatusHandlerFloatingDialog`; `StatusHandlerTemporaryPanel` | — | named |
+| BATCH-03 | Post-batch action | Action after a batch run finishes (e.g. do nothing) | `PostBatchAction` enum; `DoNothing` evidenced | `DoNothing` | named |
+| BATCH-04 | Batch error handling | How a batch run reacts to errors (stop, ignore, …) | `BatchErrorHandling` | `ErrorWarning`, `ErrorOnly`, `Retry`, `Ignore` | named |
+| BATCH-05 | RealTimeSync companion | Separate app that watches folders and triggers a sync on change | Binary `RealTimeSync_x86_64` exists in the release tree (11,983,168 bytes, stripped) | — | not-covered |
+
+### 9. Post-sync actions, logging, notifications
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| POST-01 | Post-sync command | Runs a shell command after the sync finishes | `PostSyncCommand`; sync-run setup | `PostSyncCommand`, `CommandHistory` | decompiled |
+| POST-02 | Email notification | Sends the sync log by email when the run finishes | `EmailNotification`; `sendLogAsEmailImpl` | `EmailNotification`, `EmailHistory` | named |
+| POST-03 | Sounds | Plays a sound on compare/sync finished | `Sounds`, `NotificationSound` | `Sounds`, `NotificationSound`, `CompareFinished`, `SyncFinished` | string |
+| LOG-01 | Log files | Writes a log file per run, in a chosen format, to a chosen folder | `saveNewLogFile`; `LogFileFormat`; `getLogFiles` | `LogFiles`, `LogFolder`, `LogFolderHistory`, `Format` | named |
+| LOG-02 | In-app log panel | Shows the run log in a grid inside the GUI | `LogPanel::onMsgGridContext` | — | named |
+| LOG-03 | Process summary | Summarises the run (files created/updated/deleted, errors) for the log and the result dialog | `ProcessSummary` | `Success`, `Completion`, `Errors`, `Different` | named |
+
+### 10. Safety, warnings, confirmations
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| SAFE-01 | Directory locking | Locks the synced directories during a run so a second run cannot interfere | Setting key only | `LockDirectoriesDuringSync`, `WarnDirectoryLockFailed` | string |
+| SAFE-02 | Pre-sync warnings | Warns before running when something looks risky: recycle bin unavailable, versioning folder inside the sync, unresolved conflicts, significant difference, not enough disk space, folders differing only by case, folder not existing, dependent folder pairs/base folders | `WarningDialogs` (passed to `fff::synchronize`); `OptionalDialogs` | `WarnRecycleBinNotAvailable`, `WarnVersioningFolderPartOfSync`, `WarnUnresolvedConflicts`, `WarnSignificantDifference`, `WarnNotEnoughDiskSpace`, `WarnFoldersDifferInCase`, `WarnFolderNotExisting`, `WarnDirectoryLockFailed`, `WarnDependentFolderPair`, `WarnDependentBaseFolders` | decompiled |
+| SAFE-03 | Confirmations | Asks before swapping sides, starting a sync, saving a config, or mass-invoking a command | `Confirm*` keys | `ConfirmSwapSides`, `ConfirmStartSync`, `ConfirmSaveConfig`, `ConfirmCommandMassInvoke`, `ConfirmExternalCommandMassInvoke` | string |
+| SAFE-04 | Sync-overdue notice | Flags a config whose last sync is overdue | Setting key only | `SyncOverdue` | string |
+| SAFE-05 | Non-throwing progress callback | A failure in the progress/error callback cannot abort the sync | `fff::synchronize::PcbNoThrow` (local class) | — | named |
+
+### 11. GUI — main dialog and views
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| GUI-01 | Main dialog | The main window: folder-pair grid, overview panel, config panel, results grid | `fff::MainDialog` (handlers: `onStartSync`, `onCompare`, `onCfgGridContext`, `onGridContextRim`, `onTreeGridContext`, `onSyncSettingsContext`, `onCompSettingsContext`, `onShowFolderPairOptions`, `onViewFilterContext`, `onGlobalFilterContext`, …) | `MainDialog`, `OverviewPanel`, `ConfigPanel`, `MainWindow`, `Layout`, `Panels`, `Perspective` | named |
+| GUI-02 | Results grid + tree view | Shows compared files in a grid and a folder tree, with context menus and column sorting | `GridDataTree`, `GridEventManager`, `TreeView`; `onGridLabelContextRim`, `onCfgGridLabelContext` | `SortByColumn`, `SortAscending`, `Columns`, `ColumnsLeft`, `ColumnsRight`, `CategoryView`, `ActionView`, `PathFormat`, `PathFormatLeft`, `PathFormatRight`, `GridIconSize`, `IconSize` | named |
+| GUI-03 | Copy to alternate folder | Copies selected files to a different folder by hand | `copyToAlternateFolderFrom<LEFT/RIGHT>`; `ManualCopyTo` | `ManualCopyTo`, `KeepRelativePaths`, `TargetFolder` | named |
+| GUI-04 | Folder picker dialog | Tree-based picker for local and cloud folders | `AbstractFolderPickerDlg` | `Browse directory` | named |
+| GUI-05 | Per-pair config dialog | Edits one folder pair: sync direction, versioning, filters, deletion policy | `ConfigDialog` (takes `GlobalPairConfig`, `LocalPairConfig` list, `FilterConfig`, histories) | `ConfigPanel` | named |
+| GUI-06 | Options dialog | Global options grid | `OptionsDlg` (grid cell providers, context menu) | `General`, `Appearance`, `ColorTheme`, `Language` | named |
+| GUI-07 | Update check | Checks online for a newer version and shows an update dialog | `showUpdateAvailableDialog` | `LastOnlineVersion`, `LastOnlineCheck` | named |
+| GUI-08 | Layout and appearance persistence | Remembers window size/position, panel layout, sash offsets, scroll positions, theme, DPI layout, icon size | Settings load/save functions | `Width`, `Height`, `Maximized`, `SashOffset`, `ScrollPos`, `DpiLayouts`, `ColorTheme`, `Light`, `Dark`, `ShowIcons`, `ShowPercentage`, `Stretch`, `Visible` | decompiled |
+| GUI-09 | External apps | Opens selected files in external applications / the file manager | `ExternalApps` | `ExternalApps`, `Show in file manager`, `xdg-open` | string |
+
+### 12. Configuration and persistence
+
+| ID | Feature | What it does | Implementation | Config keys | Evidence |
+|---|---|---|---|---|---|
+| CFG-01 | XML config files | Sync configs and global settings are stored as XML and read/written by the app | `readConfig(XmlIn, GlobalConfig, int)`; `GlobalConfig`; `FfsBatchConfig` | `Configurations`, `Language`, `General` | named |
+| CFG-02 | Histories | Remembers recently used folders, versioning folders, log folders, email recipients, commands and configs | History lists in settings load/save | `FolderHistory`, `FolderHistoryLeft`, `FolderHistoryRight`, `VersioningFolderHistory`, `LogFolderHistory`, `EmailHistory`, `CommandHistory`, `Configurations`, `LastSelected`, `LastUsed`, `Last` | decompiled |
+| CFG-03 | Translations | UI strings are loaded from translation files | `loadTranslations` | `Language` | named |
+| CFG-04 | Size caps | Caps on config sizes (e.g. max history entries, max folder pairs) | Setting key only | `MaxSize`, `MaxFolderPairsShown`, `FolderPairsMax` | string |
+
+### Not covered in this pass
+
+- **Inner copy/compare loop** — identified by name, not decompiled (`fff::synchronize`, `FolderPairSyncer::synchronizeFileInt`, `ComparisonBuffer::compareByContent`). Needs a vtable pointer search.
+- **RealTimeSync** — binary present, not analysed (`RealTimeSync_x86_64`, 11,983,168 bytes, stripped).
+- **Filter syntax details** — include/exclude pattern syntax, time-span and file-size filters were not recovered from the 8 decompiled functions.
+- **Batch file format** — `FfsBatchConfig` exists; the on-disk batch format was not decompiled.
+- **Comparison mode enum values** — `CompareVariant` exists; the full set of values was not recovered.
+- **Post-batch action values** — only `DoNothing` was seen in the decompiled set.
+
+### Comparing against another app
+
+For each feature ID above, fill in:
+
+| ID | FreeFileSync 14.12 | Target app | Verdict | Target evidence |
+|---|---|---|---|---|
+| SYNC-01 | Two-Way sync (`SyncVariant`) | ... | present / absent / partial / unknown | file / function / setting |
+
+Verdict rules: `present` = same behaviour confirmed in the target's code;
+`partial` = the feature exists but differs in a named way (say how);
+`absent` = no equivalent found; `unknown` = not checked yet.
+
 ## What it costs
 
 Measured on arm64 macOS 26.5, 2026-10-25 and 2026-10-26, on the packaged build where noted.
