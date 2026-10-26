@@ -610,11 +610,24 @@ struct TransferRow: View
 
                     if showsTrailing
                     {
-                        Text(transfer.statusText)
+                        Text(transfer.percentText)
                             .font(Theme.rowSmall)
                             .foregroundColor(Theme.textTertiary)
+                            .monospacedDigit()
                             .lineLimit(1)
                     }
+                }
+
+                //Rate, items/sec and the counts: the row is the only place a
+                //long transfer reports itself, so it says how fast and how much.
+                if !transfer.statsText.isEmpty
+                {
+                    Text(transfer.statsText)
+                        .font(Theme.rowSmall)
+                        .foregroundColor(Theme.textTertiary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
 
@@ -623,10 +636,9 @@ struct TransferRow: View
                 CircleButton(system: "xmark") { transfer.cancel() }
                     .testAnchor("row-\(index)-cancel")
                     .help("Cancel this transfer")
-                CircleButton(system: transfer.paused ? "play.fill" : "pause.fill")
-                { transfer.togglePause() }
+                PausePill(paused: transfer.paused) { transfer.togglePause() }
                     .testAnchor("row-\(index)-pause")
-                    .help(transfer.paused ? "Resume" : "Pause")
+                    .help(transfer.paused ? "Continue this transfer" : "Pause this transfer")
             }
         }
         .padding(.horizontal, 18)
@@ -675,6 +687,35 @@ struct ProgressBarView: View
             }
         }
         .frame(height: 7)
+    }
+}
+
+///Pause/resume as a labelled pill rather than a bare glyph: on a running row the
+///word is the thing you look for, and an 8-point triangle is not.
+struct PausePill: View
+{
+    let paused: Bool
+    let action: () -> Void
+
+    var body: some View
+    {
+        Button(action: action)
+        {
+            HStack(spacing: 4)
+            {
+                Image(systemName: paused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 7, weight: .bold))
+
+                Text(paused ? "Continue" : "Pause")
+                    .font(Theme.rowSmall)
+            }
+            .foregroundColor(Theme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Theme.buttonBG))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
