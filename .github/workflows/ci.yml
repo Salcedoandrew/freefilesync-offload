@@ -31,6 +31,13 @@ jobs:
         working-directory: FreeFileSync/Source/offload/mac
         run: make
 
+      # Compiles the mouse driver without running it. CI cannot post CGEvents (that
+      # needs Accessibility permission on a logged-in desktop), but a driver that
+      # does not build turns `make ui-test` into a mystery on the machine that does.
+      - name: Compile the mouse driver
+        working-directory: FreeFileSync/Source/offload/mac
+        run: make clickdriver
+
       - name: Fit test
         working-directory: FreeFileSync/Source/offload/mac
         run: ./Offload --fit-test

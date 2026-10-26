@@ -90,6 +90,7 @@ enum UIStateWriter
             "canAddTransfer": model.canAddTransfer,
             "canStartTransfer": model.canStartTransfer,
             "queuedTransfers": model.queuedCount,
+            "allPaused": model.allPaused,
             "summaryVisible": model.summary != nil,
             "summaryFiles": Int(model.summary?.files ?? 0),
             "summaryBytes": Int(model.summary?.bytes ?? 0),

@@ -546,6 +546,7 @@ struct TransfersPane: View
                     .foregroundColor(Theme.textSecondary)
 
                 PauseSwitch(isOn: model.allPaused) { model.togglePauseAll() }
+                    .testAnchor("pause-all")
             }
         }
         .padding(.horizontal, 16)

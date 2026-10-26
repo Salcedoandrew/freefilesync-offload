@@ -18,6 +18,7 @@ struct Snapshot
     var selectedSources = 0
     var selectedDestinations = 0
     var canAddTransfer = false
+    var allPaused = false
     var transfers: [[String: Any]] = []
     var pid: pid_t = 0
 
@@ -44,6 +45,7 @@ func loadState(_ path: String) -> Snapshot?
     snapshot.selectedSources = root["selectedSources"] as? Int ?? 0
     snapshot.selectedDestinations = root["selectedDestinations"] as? Int ?? 0
     snapshot.canAddTransfer = root["canAddTransfer"] as? Bool ?? false
+    snapshot.allPaused = root["allPaused"] as? Bool ?? false
     snapshot.transfers = root["transfers"] as? [[String: Any]] ?? []
     snapshot.pid = pid_t(root["pid"] as? Int ?? 0)
 
@@ -166,6 +168,13 @@ clickAnchor("dst-tile-1")
 check(loadState(statePath)?.selectedDestinations == 2, "a second destination adds to the selection")
 
 //--- 3. Add queues, Transfer starts ------------------------------------------
+//The run is started with the footer's Pause switch already on, so both jobs come
+//up paused. Otherwise the next click races the copy: the fixture is 48 MB per
+//destination and can finish in under a second, which would leave nothing running
+//to pause and make the checks below depend on timing.
+clickAnchor("pause-all")
+check(loadState(statePath)?.allPaused == true, "the footer's Pause switch holds the next run back")
+
 clickAnchor("add-transfers")
 snapshot = loadState(statePath) ?? snapshot
 check(snapshot.transfers.count == 2, "Add Transfers created one row per destination (got \(snapshot.transfers.count))")
@@ -175,13 +184,14 @@ check(snapshot.flag(0, "enginePaused") == false, "a queued row has no engine job
 clickAnchor("start-transfers")
 snapshot = loadState(statePath) ?? snapshot
 check(snapshot.text(0, "phase") != "queued", "Transfer handed the row to the engine (phase \(snapshot.text(0, "phase")))")
+check(snapshot.flag(0, "enginePaused") == true, "it started paused, because the Pause switch was on")
 
-//--- 4. per-row pause, resume, cancel ---------------------------------------
+//--- 4. per-row resume, pause, cancel --------------------------------------
 clickAnchor("row-0-pause")
-check(loadState(statePath)?.flag(0, "enginePaused") == true, "the row's pause button paused that job in the engine")
+check(loadState(statePath)?.flag(0, "enginePaused") == false, "the row's pause button resumed that job in the engine")
 
 clickAnchor("row-0-pause")
-check(loadState(statePath)?.flag(0, "enginePaused") == false, "clicking it again resumed the job")
+check(loadState(statePath)?.flag(0, "enginePaused") == true, "clicking it again paused the job")
 
 clickAnchor("row-0-cancel")
 check(loadState(statePath)?.flag(0, "engineCancelled") == true, "the row's cancel button reached the engine")
