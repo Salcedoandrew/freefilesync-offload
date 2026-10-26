@@ -70,6 +70,19 @@ struct RootView: View
         .preferredColorScheme(.dark)
         //published frames, so the mouse-driven UI test can click without guessing
         .onPreferenceChange(AnchorFrames.self) { model.anchorFrames = $0 }
+        //A finished run says what it copied and how fast, once the last row stops.
+        .sheet(item: summarySheet)
+        { summary in
+            RunSummaryView(summary: summary) { model.dismissSummary() }
+        }
+    }
+
+    ///Nil while --ui-serve is driving the window: a sheet there would cover the
+    ///buttons the mouse test is about to click.
+    private var summarySheet: Binding<RunSummary?>
+    {
+        Binding(get: { AppModel.suppressesSummarySheet ? nil : model.summary },
+                set: { model.summary = $0 })
     }
 
     private var separator: some View
@@ -696,6 +709,145 @@ struct TransferRow: View
         case .copying, .verifying: return true
         default: return false
         }
+    }
+}
+
+///What a finished run leaves behind: the copies it made, the rate they actually
+///ran at, and where the record went. A sheet rather than an alert, because the
+///numbers are the point and an alert cannot lay them out.
+struct RunSummaryView: View
+{
+    let summary: RunSummary
+    let onClose: () -> Void
+
+    private var headline: String
+    {
+        summary.failed > 0
+            ? "Transfer finished with \(summary.failed) damaged file\(summary.failed == 1 ? "" : "s")"
+            : "Transfer complete"
+    }
+
+    ///`221 files · 21.4 GB · 1.26 GB/sec · in 0.49 sec`
+    private var totals: String
+    {
+        var parts = ["\(Format.number(summary.files)) file\(summary.files == 1 ? "" : "s")",
+                     Format.capacity(summary.bytes)]
+        if summary.rate > 0 { parts.append(Format.rate(summary.rate)) }
+        let took = Format.duration(summary.seconds)
+        if !took.isEmpty { parts.append("in \(took)") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View
+    {
+        VStack(alignment: .leading, spacing: 0)
+        {
+            VStack(alignment: .leading, spacing: 6)
+            {
+                Text(headline)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(summary.failed > 0 ? Theme.amber : Theme.green)
+                Text(totals)
+                    .font(Theme.rowTitle)
+                    .foregroundColor(Theme.textSecondary)
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
+
+            Rectangle().fill(Theme.strokeSoft).frame(height: 1)
+
+            ScrollView
+            {
+                VStack(spacing: 0)
+                {
+                    ForEach(summary.records)
+                    { record in
+                        row(record)
+                        Rectangle().fill(Theme.strokeSoft).frame(height: 1)
+                            .padding(.leading, 20)
+                    }
+                }
+            }
+            .frame(maxHeight: 260)
+
+            Rectangle().fill(Theme.strokeSoft).frame(height: 1)
+
+            HStack(spacing: 10)
+            {
+                Text("Reports are in Pictures › Offload Reports")
+                    .font(Theme.rowSmall)
+                    .foregroundColor(Theme.textTertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button(action: onClose)
+                {
+                    Text("Done")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.defaultAction)
+                .testAnchor("summary-done")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 540)
+        .background(Theme.columnBG)
+        .preferredColorScheme(.dark)
+        .testAnchor("run-summary")
+    }
+
+    private func row(_ record: TransferRecord) -> some View
+    {
+        HStack(alignment: .top, spacing: 12)
+        {
+            VStack(alignment: .leading, spacing: 3)
+            {
+                Text(record.destination)
+                    .font(Theme.rowBold)
+                    .foregroundColor(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(record.source)
+                    .font(Theme.rowSmall)
+                    .foregroundColor(Theme.textTertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 3)
+            {
+                Text(line(for: record))
+                    .font(Theme.rowSmall)
+                    .foregroundColor(record.failed > 0 ? Theme.amber : Theme.textSecondary)
+                    .monospacedDigit()
+                Text(record.reportPath.isEmpty
+                     ? ""
+                     : (record.reportPath as NSString).lastPathComponent)
+                    .font(Theme.rowSmall)
+                    .foregroundColor(Theme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 11)
+    }
+
+    private func line(for record: TransferRecord) -> String
+    {
+        var parts = ["\(Format.number(record.files)) file\(record.files == 1 ? "" : "s")",
+                     Format.capacity(record.bytes)]
+        if record.rate > 0 { parts.append(Format.rate(record.rate)) }
+        if record.failed > 0 { parts.append("\(record.failed) damaged") }
+        return parts.joined(separator: " · ")
     }
 }
 

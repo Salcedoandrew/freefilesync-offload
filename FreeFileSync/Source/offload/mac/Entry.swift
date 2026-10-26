@@ -248,6 +248,9 @@ func runUIServe(statePath: String) -> Int32
 {
     guard let fixture = makeUITestFixture() else { return 1 }
 
+    //The summary is still built (the driver reads it from the state file), but it
+    //is not presented: a sheet would cover the buttons the driver clicks.
+    AppModel.suppressesSummarySheet = true
     let model = AppModel()
     let window = makeMainWindow(model: model)
     NSApp.setActivationPolicy(.regular)

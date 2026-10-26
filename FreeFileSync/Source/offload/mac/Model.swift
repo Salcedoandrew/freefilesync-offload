@@ -162,6 +162,39 @@ enum Format
     }
 }
 
+//--- what a finished run reports ---------------------------------------------
+
+///One finished row, as the confirmation window describes it.
+struct TransferRecord: Identifiable
+{
+    let id = UUID()
+    let source: String
+    let destination: String
+    let files: UInt64
+    let bytes: UInt64
+    let seconds: Double
+    let failed: UInt64
+    let reportPath: String
+
+    ///Bytes over the engine's own elapsed time, so this is the rate the copy
+    ///actually sustained rather than an average of the numbers shown on screen.
+    var rate: Double { seconds > 0 ? Double(bytes) / seconds : 0 }
+}
+
+///What the confirmation window shows once a run is over.
+struct RunSummary: Identifiable
+{
+    let id = UUID()
+    let records: [TransferRecord]
+
+    var files: UInt64 { records.reduce(0) { $0 + $1.files } }
+    var bytes: UInt64 { records.reduce(0) { $0 + $1.bytes } }
+    var failed: UInt64 { records.reduce(0) { $0 + $1.failed } }
+    ///Rows copy side by side, so the run took as long as its slowest row.
+    var seconds: Double { records.map(\.seconds).max() ?? 0 }
+    var rate: Double { seconds > 0 ? Double(bytes) / seconds : 0 }
+}
+
 final class Transfer: ObservableObject, Identifiable
 {
     enum Phase
@@ -468,6 +501,15 @@ final class AppModel: ObservableObject
     ///row is not running: nothing has been written, so it does not hold an update
     ///back, and the updater's message stays true.
     var hasActiveTransfers: Bool { transfers.contains { !$0.isFinished && !$0.isQueued } }
+
+    ///The confirmation window's contents, nil when there is nothing to confirm.
+    @Published var summary: RunSummary?
+    ///Set by --ui-serve. The summary is still built and published so the mouse
+    ///test can read it, but a sheet would sit over the window that test clicks.
+    nonisolated(unsafe) static var suppressesSummarySheet = false
+    ///The rows the current run is waiting on. Watched as a set so one finished row
+    ///does not pop a window per row.
+    private var watchedRun: Set<UUID> = []
     @Published var selectedSources: Set<UUID> = []
     @Published var selectedDestinations: Set<UUID> = []
     @Published var allPaused = false
@@ -503,6 +545,7 @@ final class AppModel: ObservableObject
     func tick()
     {
         for t in transfers where !t.isFinished { t.refresh() }
+        noteRunFinished()
 
         //free space moves while transfers run, so the fit check must not read a
         //number from ten minutes ago
@@ -769,7 +812,9 @@ final class AppModel: ObservableObject
     ///even if the selection has been clicked since.
     func startQueuedTransfers()
     {
-        for t in queuedTransfers
+        let starting = queuedTransfers
+        watchedRun = Set(starting.map(\.id))
+        for t in starting
         {
             t.start()
             if allPaused, t.job != nil
@@ -779,6 +824,31 @@ final class AppModel: ObservableObject
             }
         }
     }
+
+    ///A run ends when every row the Transfer button started has finished.
+    private func noteRunFinished()
+    {
+        guard !watchedRun.isEmpty else { return }
+        let rows = transfers.filter { watchedRun.contains($0.id) }
+        guard rows.allSatisfy({ $0.isFinished }) else { return }
+        watchedRun = []
+
+        let records = rows.map
+        { t in
+            TransferRecord(source: t.source.name,
+                           destination: t.targetText,
+                           files: t.filesDone,
+                           bytes: t.bytesDone,
+                           seconds: t.elapsedSeconds,
+                           failed: t.failedCount,
+                           reportPath: t.reportPath)
+        }
+        //A run stopped before it copied anything has nothing to confirm.
+        guard records.contains(where: { $0.files > 0 || $0.failed > 0 }) else { return }
+        summary = RunSummary(records: records)
+    }
+
+    func dismissSummary() { summary = nil }
 
     func togglePauseAll()
     {
