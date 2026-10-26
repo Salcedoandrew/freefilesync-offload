@@ -445,6 +445,16 @@ struct TransfersPane: View
         return n > 0 ? "Add \(n) Transfer\(n == 1 ? "" : "s")" : "Add Transfer"
     }
 
+    ///One accent button at a time: while rows are waiting to go, the thing to
+    ///press is Transfer, so Add steps back to a neutral fill.
+    private var addIsAccent: Bool { model.canAddTransfer && model.queuedCount == 0 }
+
+    private var startTitle: String
+    {
+        let n = model.queuedCount
+        return n > 1 ? "Transfer \(n)" : "Transfer"
+    }
+
     private var emptyState: some View
     {
         VStack(spacing: 10)
@@ -456,7 +466,7 @@ struct TransfersPane: View
             Text("No transfers yet")
                 .font(Theme.rowTitle)
                 .foregroundColor(Theme.textSecondary)
-            Text("Pick a source on the left, one or more destinations on the right,\nthen add the transfer.")
+            Text("Pick a source on the left, one or more destinations on the right,\nthen Add Transfer to queue it, and Transfer to start.")
                 .font(Theme.rowSmall)
                 .foregroundColor(Theme.textTertiary)
                 .multilineTextAlignment(.center)
@@ -479,12 +489,29 @@ struct TransfersPane: View
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(model.canAddTransfer ? Theme.accent : Theme.buttonBG2)
+                            .fill(addIsAccent ? Theme.accent : Theme.buttonBG2)
                     )
             }
             .buttonStyle(.plain)
             .disabled(!model.canAddTransfer)
             .testAnchor("add-transfers")
+
+            //Appears only when something is waiting: Add plans, this copies.
+            if model.canStartTransfer
+            {
+                Button(action: model.startQueuedTransfers)
+                {
+                    Text(startTitle)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent))
+                }
+                .buttonStyle(.plain)
+                .testAnchor("start-transfers")
+                .help("Start the queued transfers")
+            }
 
             if !model.fitSummary.text.isEmpty
             {
@@ -635,10 +662,15 @@ struct TransferRow: View
             {
                 CircleButton(system: "xmark") { transfer.cancel() }
                     .testAnchor("row-\(index)-cancel")
-                    .help("Cancel this transfer")
-                PausePill(paused: transfer.paused) { transfer.togglePause() }
-                    .testAnchor("row-\(index)-pause")
-                    .help(transfer.paused ? "Continue this transfer" : "Pause this transfer")
+                    .help(transfer.isQueued ? "Remove this queued transfer" : "Cancel this transfer")
+                //A queued row has no engine job, so a pause control there would
+                //be a button that does nothing.
+                if !transfer.isQueued
+                {
+                    PausePill(paused: transfer.paused) { transfer.togglePause() }
+                        .testAnchor("row-\(index)-pause")
+                        .help(transfer.paused ? "Continue this transfer" : "Pause this transfer")
+                }
             }
         }
         .padding(.horizontal, 18)

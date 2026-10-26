@@ -88,6 +88,8 @@ enum UIStateWriter
             "selectedDestinations": model.selectedDestinations.count,
             "plannedTransfers": model.plannedTransferCount,
             "canAddTransfer": model.canAddTransfer,
+            "canStartTransfer": model.canStartTransfer,
+            "queuedTransfers": model.queuedCount,
             "fitSummary": model.fitSummary.text,
             "transfers": transfers,
         ]

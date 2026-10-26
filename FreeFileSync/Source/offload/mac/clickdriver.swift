@@ -26,6 +26,12 @@ struct Snapshot
         guard row < transfers.count else { return false }
         return (transfers[row][key] as? Bool) ?? false
     }
+
+    func text(_ row: Int, _ key: String) -> String
+    {
+        guard row < transfers.count else { return "" }
+        return (transfers[row][key] as? String) ?? ""
+    }
 }
 
 func loadState(_ path: String) -> Snapshot?
@@ -159,10 +165,16 @@ check(loadState(statePath)?.selectedDestinations == 1, "clicking a destination t
 clickAnchor("dst-tile-1")
 check(loadState(statePath)?.selectedDestinations == 2, "a second destination adds to the selection")
 
-//--- 3. Add Transfers --------------------------------------------------------
+//--- 3. Add queues, Transfer starts ------------------------------------------
 clickAnchor("add-transfers")
 snapshot = loadState(statePath) ?? snapshot
 check(snapshot.transfers.count == 2, "Add Transfers created one row per destination (got \(snapshot.transfers.count))")
+check(snapshot.text(0, "phase") == "queued", "a new row waits for the Transfer button (phase \(snapshot.text(0, "phase")))")
+check(snapshot.flag(0, "enginePaused") == false, "a queued row has no engine job to pause")
+
+clickAnchor("start-transfers")
+snapshot = loadState(statePath) ?? snapshot
+check(snapshot.text(0, "phase") != "queued", "Transfer handed the row to the engine (phase \(snapshot.text(0, "phase")))")
 
 //--- 4. per-row pause, resume, cancel ---------------------------------------
 clickAnchor("row-0-pause")

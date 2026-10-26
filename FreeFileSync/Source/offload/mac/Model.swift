@@ -166,14 +166,23 @@ final class Transfer: ObservableObject, Identifiable
 {
     enum Phase
     {
-        case preparing, copying, verifying, done, cancelled, failed
+        ///Planned and on screen, but not handed to the engine yet: nothing has
+        ///been copied, so nothing is paused, resumed or reported.
+        case queued, preparing, copying, verifying, done, cancelled, failed
     }
 
     let id = UUID()
     let source: Device
     let destination: Device
     let subfolder: String
-    let job: EngineJob?
+    ///Set when the row is started, not when it is queued.
+    private(set) var job: EngineJob?
+
+    ///Where this row will write and where its report goes, decided when it is
+    ///queued: pressing Transfer later must not depend on the selection, which
+    ///may have been clicked since.
+    let destinationPath: String
+    let reportDirPath: String
 
     @Published var fraction: Double = 0
     @Published var phase: Phase = .preparing
@@ -199,16 +208,22 @@ final class Transfer: ObservableObject, Identifiable
     private var lastTime = Date()
     private var sawFinish = false
 
-    init(source: Device, destination: Device, subfolder: String, job: EngineJob?)
+    init(source: Device, destination: Device, subfolder: String, job: EngineJob?,
+         destinationPath: String = "", reportDirPath: String = "")
     {
         self.source = source
         self.destination = destination
         self.subfolder = subfolder
         self.job = job
+        self.destinationPath = destinationPath
+        self.reportDirPath = reportDirPath
     }
 
     var isFinished: Bool { phase == .done || phase == .cancelled || phase == .failed }
     var isRunning: Bool { !isFinished && !paused }
+    ///Waiting for the Transfer button. Distinct from paused: a queued row has no
+    ///engine job at all, so it has no work to hold back.
+    var isQueued: Bool { phase == .queued }
 
     var targetText: String
     {
@@ -219,6 +234,8 @@ final class Transfer: ObservableObject, Identifiable
     {
         switch phase
         {
+        case .queued:
+            return "Ready"
         case .preparing:
             return filesTotal == 0 ? "Preparing…" : "Preparing… \(filesTotal) files"
         case .copying:
@@ -408,11 +425,37 @@ final class Transfer: ObservableObject, Identifiable
 
     func togglePause()
     {
+        guard !isQueued else { return } //no job to hold back yet
         job?.setPaused(!paused)
         paused.toggle()
     }
 
-    func cancel() { job?.cancel() }
+    func cancel()
+    {
+        //A queued row has no job, so cancelling it has to retire the plan -
+        //otherwise a later Transfer press would copy a row the user dropped.
+        if isQueued
+        {
+            phase = .cancelled
+            return
+        }
+        job?.cancel()
+    }
+
+    ///Hand a queued row to the engine. This is the only place a copy starts.
+    func start()
+    {
+        guard phase == .queued else { return }
+        guard let job = EngineJob(source: source.path, destination: destinationPath,
+                                  reportDir: reportDirPath) else
+        {
+            phase = .failed
+            errorText = "cannot open source"
+            return
+        }
+        self.job = job
+        phase = .preparing
+    }
 }
 
 final class AppModel: ObservableObject
@@ -421,8 +464,10 @@ final class AppModel: ObservableObject
     @Published var destinations: [Device] = []
     @Published var transfers: [Transfer] = []
 
-    ///An update must not replace the app out from under a running copy.
-    var hasActiveTransfers: Bool { transfers.contains { !$0.isFinished } }
+    ///An update must not replace the app out from under a running copy. A queued
+    ///row is not running: nothing has been written, so it does not hold an update
+    ///back, and the updater's message stays true.
+    var hasActiveTransfers: Bool { transfers.contains { !$0.isFinished && !$0.isQueued } }
     @Published var selectedSources: Set<UUID> = []
     @Published var selectedDestinations: Set<UUID> = []
     @Published var allPaused = false
@@ -705,12 +750,32 @@ final class AppModel: ObservableObject
                     ? destination.path + subfolder
                     : destination.path + "/" + subfolder
 
-                let job = EngineJob(source: source.path, destination: destPath,
-                                    reportDir: reportDir.path)
+                //Queued, not started: Add plans the copy, Transfer performs it.
                 let transfer = Transfer(source: source, destination: destination,
-                                        subfolder: subfolder, job: job)
-                if job == nil { transfer.phase = .failed; transfer.errorText = "cannot open source" }
+                                        subfolder: subfolder, job: nil,
+                                        destinationPath: destPath, reportDirPath: reportDir.path)
+                transfer.phase = .queued
                 transfers.append(transfer)
+            }
+        }
+    }
+
+    ///Rows that are planned but not started: what the Transfer button acts on.
+    var queuedTransfers: [Transfer] { transfers.filter { $0.isQueued } }
+    var queuedCount: Int { queuedTransfers.count }
+    var canStartTransfer: Bool { !queuedTransfers.isEmpty }
+
+    ///Start every queued row. The tiles play no part here: what was queued runs,
+    ///even if the selection has been clicked since.
+    func startQueuedTransfers()
+    {
+        for t in queuedTransfers
+        {
+            t.start()
+            if allPaused, t.job != nil
+            {
+                t.job?.setPaused(true)
+                t.paused = true
             }
         }
     }
@@ -718,7 +783,13 @@ final class AppModel: ObservableObject
     func togglePauseAll()
     {
         allPaused.toggle()
-        for t in transfers where !t.isFinished { t.job?.setPaused(allPaused); t.paused = allPaused }
+        //A queued row has nothing to pause; starting it while the switch is on
+        //is handled in startQueuedTransfers().
+        for t in transfers where !t.isFinished && !t.isQueued
+        {
+            t.job?.setPaused(allPaused)
+            t.paused = allPaused
+        }
     }
 
     private static let stampFormatter: DateFormatter =

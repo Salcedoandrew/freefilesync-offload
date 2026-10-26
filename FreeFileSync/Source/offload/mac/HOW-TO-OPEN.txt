@@ -50,7 +50,7 @@ replaced and the old copy stays put.
 What it does
 ------------
 - Drag a card or folder onto the left side, one or more destination drives onto
-  the right, then Add Transfer.
+  the right, then Add Transfer to queue the copies and Transfer to start them.
 - Every file is copied to every destination, hashed while it is written
   (XXH64 by default; MD5 and SHA-1 selectable), then read back from each drive
   and compared against the source.
