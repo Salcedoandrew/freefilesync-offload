@@ -20,7 +20,8 @@ BREW_LLVM  := $(shell brew --prefix llvm 2>/dev/null)
 VERSION    := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
 ARCHIVE    := Offload-$(VERSION)-macos-$(ARCH).zip
 
-SOURCES := Entry.swift Theme.swift Engine.swift Model.swift Views.swift Demo.swift UITest.swift
+SOURCES := Entry.swift Theme.swift Engine.swift Model.swift Views.swift Updater.swift \
+           UpdateSelfTest.swift Demo.swift UITest.swift
 
 # The engine calls into glib (UTF-8 normalisation), CoreFoundation (week start)
 # and wx's translation shim; the same libraries the CLI links against.
@@ -62,7 +63,8 @@ zip: bundle
 	cp -R Offload.app dist/
 	cp HOW-TO-OPEN.txt dist/
 	ditto -c -k --sequesterRsrc dist $(ARCHIVE)
-	@shasum -a 256 $(ARCHIVE)
+	shasum -a 256 $(ARCHIVE) > SHA256SUMS.txt
+	@cat SHA256SUMS.txt
 
 screenshot: Offload
 	./Offload --render offload-window.png

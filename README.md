@@ -49,6 +49,7 @@ writes the record into the destination itself.
 | Proof, not a progress bar | XXH64 while writing, then every destination read back and compared | `report.csv` and `.ffsoffload.mhl` in each destination root |
 | A refusal instead of a half copy | Source measured by the engine's own walk, destination free space checked before the first byte | `Backup 02 is 58.8 GB short` and **Add Transfer** disabled (screenshot 03) |
 | A card that is never modified | Files opened read-only, published through a temp file and rename, identical files skipped | source tree hashes are identical before and after a run |
+| Staying current | **Check for Updates…** verifies the download against the release checksum, then replaces the app | `--update-test`, `--update-selftest <feed>` |
 
 ## Build from source
 
@@ -77,6 +78,33 @@ make zip        # Offload-<version>-macos-arm64.zip + its checksum
 ./ffsoffload /Volumes/CARD /Volumes/Backup1 /Volumes/Backup2 \
              --report ~/Desktop/offload-report --mhl
 ```
+
+## Updates
+
+**Offload menu → Check for Updates…** asks the release feed, and if there is something
+newer it replaces this copy of the app itself — no Sparkle, no helper daemon, no admin
+prompt.
+
+The order is deliberate: check, download, verify, *then* touch the installed app.
+
+1. `releases/latest` from GitHub, compared as numbers (`0.10.0` is newer than `0.9.0`).
+2. The zip is downloaded and its SHA-256 compared against the release's `SHA256SUMS.txt`.
+   A single byte of difference stops the update there.
+3. The archive is unpacked, and the bundle inside must have the same bundle id, the exact
+   version in the tag, and a code signature that passes `codesign --verify --deep --strict`.
+4. Only then a small script takes over: it waits for the app to quit, moves the old bundle
+   aside, moves the new one in, re-verifies it, deletes the old bundle and reopens the app.
+   Any failure puts the old bundle back and reopens that instead, and every attempt leaves
+   one line in `~/Library/Application Support/Offload/update/last-swap.log`.
+
+It refuses to run while transfers are in flight, and refuses to run at all from Gatekeeper's
+read-only translocated copy (open the app from `/Applications` instead).
+
+> [!WARNING]
+> This verifies **integrity, not authorship**. The build is ad-hoc signed, so there is no
+> Developer ID to check the download against: a compromised release would still pass every
+> check above. Fixing that means notarization or a signed appcast, and both need an Apple
+> Developer Program membership.
 
 ## Contact sheet
 
@@ -132,6 +160,7 @@ Measured on arm64 macOS 26.5, 2026-10-25 and 2026-10-26, on the packaged build w
 | Engine assertions | 107 pass | `./ffsoffload_tests` |
 | Fit-check boundaries | 11 pass | `./Offload --fit-test` |
 | Mouse checks against the real window | 12 pass | `make ui-test` |
+| Update checks: versions, feed, checksums, a real bundle swap | 38 pass | `--update-test` |
 | App bundle | 21 MB, 25 bundled dylibs | `du -sh Offload.app` |
 
 Read-back verification means every byte crosses the bus roughly three times instead of
@@ -140,6 +169,10 @@ once, so throughput is bounded by the slowest destination, not by the source.
 ## Limits
 
 - **No resume journal.** An interrupted job restarts that file; it does not continue mid-file.
+- **The updater trusts the release it downloads.** Ad-hoc signing means the checksum proves
+  the bytes arrived intact, not who published them.
+- **v0.4.0 cannot update itself.** It predates this feature, so that upgrade is manual; every
+  build from 0.5.0 on can.
 - **The FreeFileSync GUI is not here.** This fork carries the engine and Offload only.
 - **arm64 only.** The engine and its Homebrew dependencies are arm64, so an Intel build
   would need a dependency set that does not exist on the build machine.

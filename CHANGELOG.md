@@ -8,6 +8,49 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.5.0 — unreleased
+
+**Check for Updates, and an update that actually replaces the app.**
+
+### Added
+- **A menu bar.** There was none, so `⌘Q` did nothing and there was nowhere to put this.
+  About, Check for Updates…, Hide, Quit.
+- `Updater.swift`: reads `releases/latest`, compares versions component-wise
+  (`0.10.0` > `0.9.0`, `1.0` == `1.0.0`), downloads the release zip and verifies it against
+  the release's `SHA256SUMS.txt`, unpacks it with `ditto`, and requires the bundle id, the
+  tagged version and a passing `codesign --verify --deep --strict` before going further.
+- `UpdateInstaller`: the swap script waits for the app to quit, moves the old bundle aside,
+  moves the new one in, re-verifies it, deletes the old bundle, clears quarantine and
+  reopens. On any failure it restores the old bundle and reopens that. One line per attempt
+  in `~/Library/Application Support/Offload/update/last-swap.log`; the script deletes itself.
+- Refusals: transfers still running, a Gatekeeper-translocated copy (read-only), and a folder
+  the user cannot write to.
+- Footer chip with the version to install and download progress; `--check-update`,
+  `--update-test` and `--update-selftest <feed>` for the terminal.
+- `make zip` now writes `SHA256SUMS.txt`, which is what the updater checks against.
+
+### Verified
+- `38/38 update checks pass` (`--update-test`): version ordering incl. `0.10.0` > `0.9.0` and
+  `1.0` == `1.0.0`; feed decoding; pre-release and zip-less releases refused; `shasum` output
+  parsed; SHA-256 equal to `shasum -a 256` for a 3 MB file; the script's own contents; a real
+  swap of two bundles on disk; and a swap of a deliberately unsigned bundle that **restores
+  the old version and leaves an app in place**.
+- End to end against a local feed: 0.4.0 → 0.4.1, 6.6 MB, checksum matched, staged, spawned,
+  swapped. The replaced bundle is 0.4.1, the old one is gone, `codesign --verify` passes, and
+  it runs: `11/11 fit checks` with 22 libraries loading from its own `Contents/Frameworks`.
+- A zip with one byte appended was refused: `checksum mismatch … Nothing was replaced`, exit 3,
+  installed version still 0.4.0, no backup left behind.
+- Live check against GitHub: `current 0.4.0, latest 0.4.0 — up to date`.
+
+### Notes
+- **Integrity, not authenticity.** Ad-hoc signing gives the updater nothing to verify identity
+  against, so a compromised release would pass. Notarization or a signed appcast is the fix.
+- **v0.4.0 has no updater**, so its upgrade is manual; 0.5.0 onwards can update itself.
+- Untested: a swap interrupted by a power cut (the script only restores on its own failures),
+  and an install owned by another admin account (refused by the writability check).
+
+---
+
 ## 0.4.0 — 2026-10-25
 
 **Mouse-driven verification, and the bug it found.**

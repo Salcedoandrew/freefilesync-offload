@@ -37,6 +37,16 @@ Check the download before you run it:
 and compare against the checksum published on the release page.
 
 
+Updates
+-------
+Offload has no background updater and no login item. When you want a newer
+version, use Offload > Check for Updates... in the menu bar: it downloads the
+release, checks it against the release's SHA256SUMS.txt, and only then replaces
+this copy of the app and reopens it. Updating while a transfer is running is
+refused on purpose. If anything about the download looks wrong, nothing is
+replaced and the old copy stays put.
+
+
 What it does
 ------------
 - Drag a card or folder onto the left side, one or more destination drives onto

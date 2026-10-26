@@ -97,6 +97,11 @@ func runFitTest() -> Int32
 @MainActor
 func makeMainWindow(model: AppModel) -> NSWindow
 {
+    //the updater refuses to run while a copy is in flight. The model lives as long as
+    //the window does, and the app quits with its last window, so a strong capture here
+    //cannot outlive the thing it points at.
+    Updater.shared.hasActiveWork = { model.hasActiveTransfers }
+
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 566),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable,
                                       .fullSizeContentView],
@@ -111,6 +116,42 @@ func makeMainWindow(model: AppModel) -> NSWindow
     window.contentView = NSHostingView(rootView: RootView(model: model))
     window.center()
     return window
+}
+
+//--- menu ---------------------------------------------------------------------
+
+///Offload had no menu bar at all, so Cmd-Q did nothing and there was nowhere to put
+///"Check for Updates". This is the standard application menu, and nothing more.
+@MainActor
+func installMainMenu(delegate: AppDelegate)
+{
+    let main = NSMenu()
+
+    let appItem = NSMenuItem()
+    main.addItem(appItem)
+    let appMenu = NSMenu(title: "Offload")
+
+    let about = NSMenuItem(title: "About Offload",
+                           action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                           keyEquivalent: "")
+    about.target = NSApp
+    appMenu.addItem(about)
+    appMenu.addItem(.separator())
+
+    let check = NSMenuItem(title: "Check for Updates…",
+                           action: #selector(AppDelegate.checkForUpdates(_:)),
+                           keyEquivalent: "")
+    check.target = delegate
+    appMenu.addItem(check)
+    appMenu.addItem(.separator())
+
+    appMenu.addItem(withTitle: "Hide Offload", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    let quit = NSMenuItem(title: "Quit Offload", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    quit.target = NSApp
+    appMenu.addItem(quit)
+
+    appItem.submenu = appMenu
+    NSApp.mainMenu = main
 }
 
 //--- mouse-driven UI test (serving half) -------------------------------------
@@ -188,6 +229,9 @@ final class StateTicker: NSObject
 ///Held so the ticker is not deallocated while the app runs.
 @MainActor var uiTicker: StateTicker?
 
+///Held so the menu's targets outlive the call that builds it.
+@MainActor var menuDelegate: AppDelegate?
+
 ///Opens the real window on a fixture and publishes its click targets and state.
 ///The driver (`clickdriver`) reads that file, posts genuine CGEvents and checks
 ///what changed. Runs until the driver kills it.
@@ -199,6 +243,9 @@ func runUIServe(statePath: String) -> Int32
     let model = AppModel()
     let window = makeMainWindow(model: model)
     NSApp.setActivationPolicy(.regular)
+    let delegate = AppDelegate()
+    menuDelegate = delegate
+    installMainMenu(delegate: delegate)
     NSApp.finishLaunching()
     window.makeKeyAndOrderFront(nil)
     NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
@@ -339,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification)
     {
+        installMainMenu(delegate: self)
         let window = makeMainWindow(model: AppModel())
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -346,6 +394,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    @MainActor @objc func checkForUpdates(_ sender: Any?)
+    {
+        Updater.shared.checkFromMenu()
+    }
 }
 
 //--- dispatch ----------------------------------------------------------------
@@ -361,6 +414,21 @@ struct OffloadMain
         if args.contains("--fit-test")
         {
             exit(runFitTest())
+        }
+
+        if args.contains("--update-test")
+        {
+            exit(UpdateSelfTest.run())
+        }
+
+        if args.contains("--check-update")
+        {
+            UpdateSelfTest.runCheckUpdate()
+        }
+
+        if let i = args.firstIndex(of: "--update-selftest"), i + 1 < args.count
+        {
+            UpdateSelfTest.runEndToEnd(feed: args[i + 1])
         }
 
         if let i = args.firstIndex(of: "--ui-serve"), i + 1 < args.count

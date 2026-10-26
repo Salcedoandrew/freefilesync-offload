@@ -374,6 +374,7 @@ struct DeviceGlyph: View
 struct TransfersPane: View
 {
     @ObservedObject var model: AppModel
+    @ObservedObject private var updater = Updater.shared
     @Environment(\.snapshotRendering) private var snapshotRendering
 
     private var rows: some View
@@ -493,6 +494,8 @@ struct TransfersPane: View
 
             Spacer(minLength: 8)
 
+            updateChip
+
             HStack(spacing: 7)
             {
                 Text("Paused")
@@ -504,6 +507,50 @@ struct TransfersPane: View
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
+    }
+
+    ///Only appears when there is something to say: an update to install, a download
+    ///in flight, or a failure worth reading. A permanent "You are up to date" would
+    ///just take up the footer.
+    @ViewBuilder
+    private var updateChip: some View
+    {
+        switch updater.phase
+        {
+        case .available(let release):
+            Button(action: { updater.install(release) })
+            {
+                Text("Update to \(release.version.raw)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent))
+            }
+            .buttonStyle(.plain)
+            .testAnchor("update-chip")
+
+        case .downloading(_, let fraction):
+            Text("Downloading update \(Int((fraction * 100).rounded()))%")
+                .font(Theme.rowSmall)
+                .foregroundColor(Theme.textSecondary)
+
+        case .installing(let release):
+            Text("Restarting into \(release.version.raw)…")
+                .font(Theme.rowSmall)
+                .foregroundColor(Theme.textSecondary)
+
+        case .failed(let why):
+            Text(why)
+                .font(Theme.rowSmall)
+                .foregroundColor(Theme.amber)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 320, alignment: .trailing)
+
+        case .idle, .checking, .upToDate:
+            EmptyView()
+        }
     }
 }
 

@@ -318,6 +318,9 @@ final class AppModel: ObservableObject
     @Published var sources: [Device] = []
     @Published var destinations: [Device] = []
     @Published var transfers: [Transfer] = []
+
+    ///An update must not replace the app out from under a running copy.
+    var hasActiveTransfers: Bool { transfers.contains { !$0.isFinished } }
     @Published var selectedSources: Set<UUID> = []
     @Published var selectedDestinations: Set<UUID> = []
     @Published var allPaused = false
