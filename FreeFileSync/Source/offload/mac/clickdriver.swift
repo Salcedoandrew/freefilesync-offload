@@ -196,6 +196,12 @@ check(loadState(statePath)?.flag(0, "enginePaused") == true, "clicking it again 
 clickAnchor("row-0-cancel")
 check(loadState(statePath)?.flag(0, "engineCancelled") == true, "the row's cancel button reached the engine")
 
+//--- 4b. Clear Finished sweeps out the row that ended ------------------------
+//Two rows: row 0 cancelled, row 1 still paused. Only the finished one goes.
+clickAnchor("clear-finished")
+let afterClear = loadState(statePath)?.transfers.count ?? -1
+check(afterClear == 1, "Clear Finished removed the cancelled row and kept the paused one (got \(afterClear))")
+
 //--- 5. Add with nothing selected does nothing --------------------------------
 let rowsBefore = loadState(statePath)?.transfers.count ?? 0
 clickAnchor("dst-tile-0")

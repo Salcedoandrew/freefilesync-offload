@@ -421,10 +421,33 @@ struct TransfersPane: View
             }
             .overlay(alignment: .trailing)
             {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(Theme.textTertiary)
-                    .padding(.trailing, 16)
+                HStack(spacing: 10)
+                {
+                    //Appears only when a row has finished: a permanently dimmed
+                    //button in the header is clutter, and this one has one job.
+                    if model.finishedCount > 0
+                    {
+                        Button(action: model.clearFinished)
+                        {
+                            Text("Clear Finished")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.textSecondary)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6).fill(Theme.buttonBG2)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .testAnchor("clear-finished")
+                        .help("Remove the transfers that completed or were cancelled")
+                    }
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(Theme.textTertiary)
+                }
+                .padding(.trailing, 16)
             }
             .padding(.top, 12)
             .padding(.bottom, 10)

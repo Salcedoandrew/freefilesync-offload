@@ -803,6 +803,19 @@ final class AppModel: ObservableObject
         }
     }
 
+    ///Rows that are over and safe to sweep out of the list: completed or cancelled.
+    ///A failed row is deliberately not counted - its error is worth reading, and the
+    ///list is the only place that names which files failed.
+    var finishedCount: Int
+    {
+        transfers.filter { $0.phase == .done || $0.phase == .cancelled }.count
+    }
+
+    func clearFinished()
+    {
+        transfers.removeAll { $0.phase == .done || $0.phase == .cancelled }
+    }
+
     ///Rows that are planned but not started: what the Transfer button acts on.
     var queuedTransfers: [Transfer] { transfers.filter { $0.isQueued } }
     var queuedCount: Int { queuedTransfers.count }
