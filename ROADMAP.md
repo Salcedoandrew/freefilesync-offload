@@ -291,9 +291,12 @@ time when it finishes; pause/resume is a labelled `Pause`/`Continue` pill instea
 8-point glyph. A paused row drops the rate and the ETA rather than leaving frozen numbers
 on screen.
 
-**Still not compiled or run here.** No macOS toolchain in this environment, so the engine
-changes and the Swift changes are both static-only: `make -f Makefile.macos test`, the
-fit/update self-tests and CI are where they will first actually build.
+**Verified by CI, not here.** This environment has no macOS toolchain, so everything
+above was written and reviewed static-only. CI run 12 on `00b7a77` then built all of it:
+engine tests (including the new `testTruncatedReport`), the Swift app, the fit test, the
+update tests and the app self-test — every step green. That covers compilation and the
+engine's behaviour. It does not cover the updater's no-checksum refusal at runtime,
+because the update self-test never performs a real install.
 
 ---
 
