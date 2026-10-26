@@ -148,6 +148,16 @@ The thinking behind it, with the measurements and the refusals, is in
 | [phase1-report.md](docs/offload/phase1-report.md) | the headless engine, with numbers |
 | [phase2-report.md](docs/offload/phase2-report.md) | the window, the fit check, and the mouse test |
 
+### Cutting a release
+
+Bump `CFBundleShortVersionString` in `offload/mac/Info.plist`, add a `## <version>`
+section to `CHANGELOG.md`, and push to `main`. If that version has no release yet, the
+`Release` workflow builds on macOS, runs the engine tests, and publishes the zip plus
+`SHA256SUMS.txt` — and creates the `v<version>` tag at that commit itself. No tag push. A
+`v*` tag still works if one is pushed anyway, and a version that is already released is
+skipped, so a re-run uploads over the existing assets instead of failing. Re-run the
+workflow from the Actions tab to rebuild the same version after a failed run.
+
 ## What it costs
 
 Measured on arm64 macOS 26.5, 2026-10-25 and 2026-10-26, on the packaged build where noted.

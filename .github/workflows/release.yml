@@ -1,14 +1,72 @@
 name: Release
 
+# Two ways in, one build:
+#   - a push to main whose Info.plist version has no release yet (the normal path:
+#     bump the version, commit, push - the tag is created by this workflow)
+#   - a v* tag push, kept so an existing tag still cuts its release
+#   - workflow_dispatch, to rebuild the current version after a failed run
+#
+# `gh release create --target` creates the tag on the remote when it is missing,
+# which is the part a laptop push used to have to get right.
+
 on:
   push:
+    branches: [main]
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+# One release at a time: a tag push and a main push naming the same version must
+# not race to create the same release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # Cheap gate on ubuntu, so an ordinary commit to main costs almost nothing.
+  # It answers one question: does this version already have a release?
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      should_release: ${{ steps.resolve.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version and check for an existing release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            # The bundle version is the single source of truth, so the version
+            # the release is named after is the version inside the app.
+            VER=$(python3 -c "import plistlib,sys; print(plistlib.load(open(sys.argv[1],'rb'))['CFBundleShortVersionString'])" \
+              FreeFileSync/Source/offload/mac/Info.plist)
+            TAG="v$VER"
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ -z "$VERSION" ]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "No CFBundleShortVersionString in Info.plist - nothing to cut."
+          elif gh release view "$TAG" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG already has a release - nothing to do."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Cutting $TAG."
+          fi
+
   release:
+    needs: gate
+    if: needs.gate.outputs.should_release == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -34,28 +92,30 @@ jobs:
         working-directory: FreeFileSync/Source/offload/mac
         run: make zip
 
-      # The notes for the pushed tag are its CHANGELOG section, from its
+      # The notes are the CHANGELOG section for this version, from its
       # "## <version>" heading to the next "## " heading.
       - name: Extract release notes
+        env:
+          VER: ${{ needs.gate.outputs.version }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VER="${TAG#v}"
           awk -v ver="$VER" 'index($0, "## " ver) == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then
-            printf '%s\n' "Offload $TAG" > notes.md
+            printf '%s\n' "Offload v$VER" > notes.md
           fi
           cat notes.md
 
       # Idempotent: a re-run uploads the assets to the existing release
-      # instead of failing because the release already exists.
+      # instead of failing because the release already exists. --target makes
+      # GitHub create the tag at this commit when it does not exist yet.
       - name: Create GitHub release
         working-directory: FreeFileSync/Source/offload/mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.gate.outputs.tag }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" --clobber Offload-*.zip SHA256SUMS.txt
           else
-            gh release create "$TAG" --title "$TAG" --notes-file "$GITHUB_WORKSPACE/notes.md" Offload-*.zip SHA256SUMS.txt
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+              --notes-file "$GITHUB_WORKSPACE/notes.md" Offload-*.zip SHA256SUMS.txt
           fi
