@@ -85,17 +85,20 @@ struct RootView: View
 
     private func pickDestination()
     {
-        for url in openPanel(title: "Choose a destination")
+        for url in openPanel(title: "Choose a destination", canCreateFolder: true)
         { model.addDestination(url: url) }
     }
 
-    private func openPanel(title: String) -> [URL]
+    private func openPanel(title: String, canCreateFolder: Bool = false) -> [URL]
     {
         let panel = NSOpenPanel()
         panel.title = title
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
+        //draws the panel's own "New Folder" button: a destination is often chosen
+        //on a fresh drive, where the folder you want does not exist yet
+        panel.canCreateDirectories = canCreateFolder
         return panel.runModal() == .OK ? panel.urls : []
     }
 }
