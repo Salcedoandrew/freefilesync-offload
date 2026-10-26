@@ -7,6 +7,9 @@
 
     #include <fcntl.h> //open
     #include <unistd.h> //close, getentropy
+#if defined(__APPLE__)
+    #include <sys/random.h> //getentropy lives here on macOS
+#endif
     #include <zen/sys_error.h>
     //#include <uuid/uuid.h> -> uuid_generate(), uuid_unparse(); avoid additional dependency for "sudo apt-get install uuid-dev"
 
@@ -17,6 +20,11 @@ std::string generateGUID() //creates a 16-byte GUID
 {
     std::string guid(16, '\0');
 
+#if defined(__APPLE__)
+    if (::getentropy(guid.data(), guid.size()) != 0)  //macOS: available since 10.12, same 256-byte cap
+        throw std::runtime_error(std::string(__FILE__) + '[' + numberTo<std::string>(__LINE__) + "] Failed to generate GUID." + "\n\n" +
+                                 utfTo<std::string>(formatSystemError("getentropy", errno)));
+#else //Linux: getentropy() arrived with Glibc 2.25
 #ifndef __GLIBC_PREREQ
 #error Where is Glibc?
 #endif
@@ -42,7 +50,8 @@ std::string generateGUID() //creates a 16-byte GUID
         offset += bytesRead;
         assert(offset <= guid.size());
     }
-#endif
+#endif //__GLIBC_PREREQ
+#endif //__APPLE__
     return guid;
 
 }

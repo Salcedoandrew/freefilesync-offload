@@ -17,7 +17,11 @@
 #include "abstract_impl.h"
 #include "../base/icon_loader.h"
 
+#if defined(__APPLE__)
+    #include <sys/mount.h> //statfs
+#else
     #include <sys/vfs.h> //statfs
+#endif
 
     #include <sys/stat.h>
     #include <dirent.h>

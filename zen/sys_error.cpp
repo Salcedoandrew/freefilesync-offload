@@ -14,6 +14,11 @@ namespace
 {
 std::wstring formatSystemErrorCode(ErrorCode ec)
 {
+#if defined(__APPLE__)
+    //macOS errno vocabulary is not the Linux one (no ECHRNG/EL2NSYNC/... and different numbering),
+    //so the table below would be incomplete and partly misleading: strerror() is authoritative here.
+    return utfTo<std::wstring>(::strerror(ec));
+#else
     switch (ec) //pretty much all codes currently used on CentOS 7 and macOS 10.15
     {
             ZEN_CASE_RETURN_STRING(EPERM);
@@ -151,6 +156,7 @@ std::wstring formatSystemErrorCode(ErrorCode ec)
         default:
             return replaceCpy(_("Error code %x"), L"%x", numberTo<std::wstring>(ec));
     }
+#endif //__APPLE__
 }
 }
 

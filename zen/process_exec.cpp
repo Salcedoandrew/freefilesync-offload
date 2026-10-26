@@ -87,8 +87,16 @@ std::pair<int /*exit code*/, std::string> processExecuteImpl(const Zstring& file
     //--------------------------------------------------------------
     //waitpid() is a useless pile of garbage without time out => check EOF from dummy pipe instead
     int pipe[2] = {};
+#if defined(__APPLE__)
+    if (::pipe(pipe) != 0)
+        THROW_LAST_SYS_ERROR("pipe");
+    for (const int fd : pipe)
+        if (::fcntl(fd, F_SETFD, FD_CLOEXEC) != 0)
+            THROW_LAST_SYS_ERROR("fcntl(FD_CLOEXEC)");
+#else
     if (::pipe2(pipe, O_CLOEXEC) != 0)
         THROW_LAST_SYS_ERROR("pipe2");
+#endif
 
     const int fdLifeSignR = pipe[0]; //for parent process
     const int fdLifeSignW = pipe[1]; //for child process

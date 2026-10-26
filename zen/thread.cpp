@@ -6,7 +6,11 @@
 
 #include "thread.h"
 #include "globals.h"
+#if defined(__APPLE__)
+    #include <pthread.h> //pthread_setname_np
+#else
     #include <sys/prctl.h>
+#endif
 
 using namespace zen;
 
@@ -15,7 +19,11 @@ using namespace zen;
 
 void zen::setCurrentThreadName(const Zstring& threadName)
 {
+#if defined(__APPLE__)
+    ::pthread_setname_np(threadName.c_str()); //macOS: current thread only, 63 bytes max
+#else
     ::prctl(PR_SET_NAME, threadName.c_str(), 0, 0, 0);
+#endif
 
 }
 

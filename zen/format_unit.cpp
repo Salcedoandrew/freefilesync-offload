@@ -5,6 +5,9 @@
 // *****************************************************************************
 
 #include "format_unit.h"
+#if defined(__APPLE__)
+    #include <CoreFoundation/CoreFoundation.h> //CFLocaleFirstWeekday
+#endif
 #include "basic_math.h"
 #include "sys_error.h"
 #include "i18n.h"
@@ -210,10 +213,22 @@ WeekDay impl::getFirstDayOfWeekImpl() //throw SysError
         ---------------------------------------
         LC_TIME=en_DK.utf8    => Monday
         LC_TIME=en_US.utf8    => Sunday       */
+#if defined(__APPLE__)
+    //macOS has no _NL_TIME_FIRST_WEEKDAY: ask the current CFLocale instead, same [1-Sunday, 7-Saturday] range
+    int weekDayStartSunday = 1;
+    if (const CFCalendarRef cal = ::CFCalendarCopyCurrent())
+    {
+        ZEN_ON_SCOPE_EXIT(::CFRelease(cal));
+        const int firstDay = ::CFCalendarGetFirstWeekday(cal); //[1-Sunday, 7-Saturday]
+        if (1 <= firstDay && firstDay <= 7)
+            weekDayStartSunday = firstDay;
+    }
+#else
     const char* firstDay = ::nl_langinfo(_NL_TIME_FIRST_WEEKDAY); //[1-Sunday, 7-Saturday]
     ASSERT_SYSERROR(firstDay && 1 <= *firstDay && *firstDay <= 7);
 
     const int weekDayStartSunday = *firstDay;                        //[1-Sunday, 7-Saturday]
+#endif
     const int weekDayStartMonday = (weekDayStartSunday - 2 + 7) % 7; //[0-Monday, 6-Sunday]  7 == 0 in Z_7
 
     return static_cast<WeekDay>(weekDayStartMonday);

@@ -14,7 +14,9 @@
     #include "file_io.h"
     #include <ifaddrs.h>
     #include <net/if.h> //IFF_LOOPBACK
+#if !defined(__APPLE__)
     #include <netpacket/packet.h> //sockaddr_ll
+#endif
 
 
     #include "process_exec.h"

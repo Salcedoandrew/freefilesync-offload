@@ -133,8 +133,12 @@ FileInputPlain::FileInputPlain(FileHandle handle, const Zstring& filePath) :
     FileBase(handle, filePath)
 {
     //optimize read-ahead on input file:
+#if !defined(__APPLE__)
     if (::posix_fadvise(getHandle(), 0 /*offset*/, 0 /*len*/, POSIX_FADV_SEQUENTIAL) != 0) //"len == 0" means "end of the file"
         THROW_LAST_FILE_ERROR(replaceCpy(_("Cannot read file %x."), L"%x", fmtPath(filePath)), "posix_fadvise(POSIX_FADV_SEQUENTIAL)");
+#else
+    //macOS has no posix_fadvise(); F_RDADVISE would need an explicit struct radvisory, not worth it here
+#endif
 
     /*  - POSIX_FADV_SEQUENTIAL is like POSIX_FADV_NORMAL, but with twice the read-ahead buffer size
         - POSIX_FADV_NOREUSE "since  kernel  2.6.18 this flag is a no-op" WTF!?

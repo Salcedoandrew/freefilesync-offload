@@ -5,6 +5,9 @@
 // *****************************************************************************
 
 #include "shutdown.h"
+#if defined(__APPLE__)
+    #include <unistd.h> //_exit
+#endif
 #include "thread.h"
 #include "file_error.h"
     #include <zen/process_exec.h>
@@ -52,7 +55,11 @@ void zen::suspendSystem() //throw FileError
 
 void zen::terminateProcess(int exitCode)
 {
+#if defined(__APPLE__)
+    ::_exit(exitCode); //macOS libc has no quick_exit(); _exit() has the same "skip atexit/static destructors" semantics
+#else
     std::quick_exit(exitCode); //[[noreturn]]; "Causes normal program termination to occur without completely cleaning the resources." => perfect
+#endif
 
 
     for (;;) //why still here?? => crash deliberately!

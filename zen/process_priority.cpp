@@ -46,6 +46,24 @@ void setCpuPriority(int prio) //throw SysError
 #endif
 //---------------------------------------------------------------------------------------------------
 
+#if defined(__APPLE__)
+//macOS has no ioprio: PRIO_DARWIN_BG throttles this process's CPU and I/O the same way
+int getIoPriority() //throw SysError
+{
+    errno = 0;
+    const int prio = ::getpriority(PRIO_DARWIN_PROCESS, 0);
+    if (prio == -1 && errno != 0)
+        THROW_LAST_SYS_ERROR("getpriority");
+    return prio;
+}
+
+
+void setIoPriority(int ioPrio) //throw SysError
+{
+    if (::setpriority(PRIO_DARWIN_PROCESS, 0, ioPrio) != 0)
+        THROW_LAST_SYS_ERROR("setpriority(" + numberTo<std::string>(ioPrio) + ')');
+}
+#else
 //- required functions ioprio_get/ioprio_set are not part of glibc: https://linux.die.net/man/2/ioprio_set
 //- and probably never will: https://sourceware.org/bugzilla/show_bug.cgi?id=4464
 //https://github.com/torvalds/linux/blob/master/include/uapi/linux/ioprio.h
@@ -91,6 +109,7 @@ void setIoPriority(int ioPrio) //throw SysError
     if (::syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, ::getpid(), ioPrio) != 0)
         THROW_LAST_SYS_ERROR("ioprio_set(0x" + printNumber<std::string>("%x", static_cast<unsigned int>(ioPrio)) + ')');
 }
+#endif //__APPLE__
 }
 
 
@@ -108,7 +127,11 @@ SetProcessPriority::SetProcessPriority(ProcessPriority prio) : //throw FileError
         {
             pimpl_->oldIoPrio = getIoPriority(); //throw SysError
 
+#if defined(__APPLE__)
+            setIoPriority(PRIO_DARWIN_BG); //throw SysError
+#else
             setIoPriority(IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 6 /*0 (highest) to 7 (lowest)*/)); //throw SysError
+#endif
             //maybe even IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0)  ? nope: "only served when no one else is using the disk"
         }
         catch (const SysError& e) { throw FileError(_("Cannot change process I/O priorities."), e.toString()); }

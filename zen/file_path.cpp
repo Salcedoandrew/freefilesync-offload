@@ -7,6 +7,10 @@
 #include "file_path.h"
 #include "zstring.h"
     #include <unistd.h>
+#if defined(__APPLE__)
+    #include <crt_externs.h>
+    #define environ (*_NSGetEnviron()) //macOS: environ is not a plain linker symbol
+#endif
 
 using namespace zen;
 

@@ -31,24 +31,40 @@ std::wstring formatGaiErrorCode(int ec)
 {
     switch (ec) //codes used on both Linux and macOS
     {
+#ifdef EAI_ADDRFAMILY
             ZEN_CASE_RETURN_STRING(EAI_ADDRFAMILY);
+#endif
             ZEN_CASE_RETURN_STRING(EAI_AGAIN);
             ZEN_CASE_RETURN_STRING(EAI_BADFLAGS);
             ZEN_CASE_RETURN_STRING(EAI_FAIL);
             ZEN_CASE_RETURN_STRING(EAI_FAMILY);
             ZEN_CASE_RETURN_STRING(EAI_MEMORY);
+#ifdef EAI_NODATA
             ZEN_CASE_RETURN_STRING(EAI_NODATA);
+#endif
             ZEN_CASE_RETURN_STRING(EAI_NONAME);
             ZEN_CASE_RETURN_STRING(EAI_SERVICE);
             ZEN_CASE_RETURN_STRING(EAI_SOCKTYPE);
             ZEN_CASE_RETURN_STRING(EAI_SYSTEM);
             ZEN_CASE_RETURN_STRING(EAI_OVERFLOW);
+#ifdef EAI_INPROGRESS
             ZEN_CASE_RETURN_STRING(EAI_INPROGRESS);
+#endif
+#ifdef EAI_CANCELED
             ZEN_CASE_RETURN_STRING(EAI_CANCELED);
+#endif
+#ifdef EAI_NOTCANCELED
             ZEN_CASE_RETURN_STRING(EAI_NOTCANCELED);
+#endif
+#ifdef EAI_ALLDONE
             ZEN_CASE_RETURN_STRING(EAI_ALLDONE);
+#endif
+#ifdef EAI_INTR
             ZEN_CASE_RETURN_STRING(EAI_INTR);
+#endif
+#ifdef EAI_IDN_ENCODE
             ZEN_CASE_RETURN_STRING(EAI_IDN_ENCODE);
+#endif
         default:
             return replaceCpy(_("Error code %x"), L"%x", numberTo<std::wstring>(ec));
     }
@@ -107,6 +123,16 @@ public:
 
         const auto getConnectedSocket = [timeoutSec](const auto& /*addrinfo*/ ai)
         {
+#if defined(__APPLE__)
+            SocketType testSocket = ::socket(ai.ai_family,      //int socket_family
+                                             ai.ai_socktype,    //int socket_type: macOS rejects SOCK_NONBLOCK/SOCK_CLOEXEC here
+                                             ai.ai_protocol);   //int protocol
+            if (testSocket == invalidSocket)
+                THROW_LAST_SYS_ERROR_WSA("socket");
+            ZEN_ON_SCOPE_FAIL(closeSocket(testSocket));
+            ::fcntl(testSocket, F_SETFL, ::fcntl(testSocket, F_GETFL) | O_NONBLOCK);
+            ::fcntl(testSocket, F_SETFD, FD_CLOEXEC);
+#else
             SocketType testSocket = ::socket(ai.ai_family,    //int socket_family
                                              SOCK_CLOEXEC | SOCK_NONBLOCK |
                                              ai.ai_socktype,  //int socket_type
@@ -114,6 +140,7 @@ public:
             if (testSocket == invalidSocket)
                 THROW_LAST_SYS_ERROR_WSA("socket");
             ZEN_ON_SCOPE_FAIL(closeSocket(testSocket));
+#endif
 
             if (::connect(testSocket, ai.ai_addr, static_cast<int>(ai.ai_addrlen)) != 0) //0 or SOCKET_ERROR(-1)
             {

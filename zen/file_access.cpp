@@ -15,7 +15,12 @@
 #include "guid.h"
 #include "ring_buffer.h"
 
+#if defined(__APPLE__)
+    #include <sys/mount.h>    //statfs
+    #include <sys/statvfs.h> //statvfs
+#else
     #include <sys/vfs.h> //statfs
+#endif
     #ifdef HAVE_SELINUX
         #include <selinux/selinux.h>
     #endif

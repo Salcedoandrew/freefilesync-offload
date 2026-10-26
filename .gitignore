@@ -1,0 +1,11 @@
+# build outputs
+FreeFileSync/Source/build/
+FreeFileSync/Source/*.a
+FreeFileSync/Source/ffsoffload
+FreeFileSync/Source/ffsoffload_tests
+FreeFileSync/Source/offload/mac/Offload
+FreeFileSync/Source/offload/mac/Offload.app/
+FreeFileSync/Source/offload/mac/clickdriver
+*.o
+*.d
+.DS_Store

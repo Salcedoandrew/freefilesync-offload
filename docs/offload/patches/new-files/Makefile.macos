@@ -1,0 +1,106 @@
+# macOS build of the FreeFileSync engine layer plus the Offload mode.
+#
+#   make -f Makefile.macos            -> libffsengine.a, ffsoffload, ffsoffload_tests
+#   make -f Makefile.macos test       -> run the Offload test suite
+#   make -f Makefile.macos clean
+#
+# This is a port of the upstream Linux/GTK Makefile, not a replacement: upstream
+# `make` still builds the GTK GUI. Differences:
+#   - no gtk+-3.0 (the Linux GUI toolkit); Cocoa comes from wx-config
+#   - glib/gio/gobject are real engine dependencies (UTF-8 normalisation, Trash)
+#   - CoreFoundation for the locale week-start query
+#   - zen/mac_compat.h is force-included BEFORE zen/i18n.h: libc++ needs the std
+#     headers libstdc++ used to pull in transitively
+#   - zen/dir_watcher.cpp is excluded: inotify-only, and only RealTimeSync uses it
+#   - icon_loader is stubbed (upstream loads GTK icon themes)
+#   - FTP/SFTP/GDrive transports are excluded: Offload is local-only for now
+
+# Apple clang 15 (the only /usr/bin compiler on this machine) rejects -std=c++23;
+# Homebrew LLVM does not. Override on the command line if you have newer Xcode:
+#   make -f Makefile.macos CXX=/usr/bin/clang++
+CXX := /opt/homebrew/opt/llvm/bin/clang++
+AR  := /usr/bin/ar
+
+BREW_LLVM := $(shell brew --prefix llvm)
+
+CXXFLAGS += -std=c++23 -pipe -O2 -DNDEBUG -D_LIBCPP_DISABLE_AVAILABILITY \
+            -mmacosx-version-min=12.0 -DWXINTL_NO_GETTEXT_MACRO \
+            -I. -I../.. -I../../zenXml \
+            -include zen/mac_compat.h -include zen/i18n.h \
+            -Wno-everything -pthread -MMD -MP
+
+CXXFLAGS += $(shell wx-config --cxxflags --debug=no)
+CXXFLAGS += $(shell pkg-config --cflags glib-2.0 gio-2.0 gobject-2.0 openssl libcurl libssh2 libidn2)
+
+LDFLAGS += -L$(BREW_LLVM)/lib/c++ -Wl,-rpath,$(BREW_LLVM)/lib/c++ \
+           $(shell wx-config --libs std --debug=no) \
+           $(shell pkg-config --libs glib-2.0 gio-2.0 gobject-2.0 openssl libcurl libssh2 libidn2) \
+           -framework CoreFoundation
+
+LIB = libffsengine.a
+
+zenFiles = \
+    argon2.cpp file_access.cpp file_io.cpp file_path.cpp file_traverser.cpp \
+    format_unit.cpp http.cpp legacy_compiler.cpp open_ssl.cpp process_exec.cpp \
+    process_priority.cpp recycler.cpp resolve_path.cpp shutdown.cpp \
+    sys_error.cpp sys_info.cpp sys_version.cpp thread.cpp \
+    zlib_wrap.cpp zstring.cpp
+
+# concrete.cpp is the path-phrase dispatcher (ftp://, sftp://, gdrive:...) and pulls
+# in the transports above; Offload builds AbstractPaths via native.h instead.
+afsFiles = \
+    abstract.cpp native.cpp
+
+baseFiles = binary.cpp structures.cpp
+
+offloadFiles = \
+    hash.cpp engine.cpp report.cpp
+
+objs = $(addprefix build/zen_,$(zenFiles:.cpp=.o)) \
+       $(addprefix build/afs_,$(afsFiles:.cpp=.o)) \
+       $(addprefix build/base_,$(baseFiles:.cpp=.o)) \
+       $(addprefix build/offload_,$(offloadFiles:.cpp=.o)) \
+       build/icon_loader_stub.o
+
+all: $(LIB) ffsoffload ffsoffload_tests
+
+$(LIB): $(objs)
+	$(AR) rcs $@ $^
+
+build/zen_%.o: ../../zen/%.cpp
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+build/afs_%.o: afs/%.cpp
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+build/base_%.o: base/%.cpp
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+build/offload_%.o: offload/%.cpp
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# upstream base/icon_loader.cpp loads GTK icon themes; an Offload app wants
+# NSWorkspace icons instead, so the engine links against a stub.
+build/icon_loader_stub.o: macos/icon_loader_stub.cpp
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+-include $(objs:.o=.d) $(addprefix build/,offload_main.d offload_tests.d)
+
+ffsoffload: build/offload_main.o $(objs) $(LIB)
+	$(CXX) $(CXXFLAGS) build/offload_main.o $(LIB) -o $@ $(LDFLAGS)
+
+ffsoffload_tests: build/offload_tests.o $(objs) $(LIB)
+	$(CXX) $(CXXFLAGS) build/offload_tests.o $(LIB) -o $@ $(LDFLAGS)
+
+test: ffsoffload_tests
+	./ffsoffload_tests
+
+clean:
+	rm -rf build $(LIB) ffsoffload ffsoffload_tests
+
+.PHONY: all test clean

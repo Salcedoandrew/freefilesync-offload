@@ -195,7 +195,9 @@ std::wstring formatSshStatusCode(int sc)
             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_MAC_FAILURE);
             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_HASH_INIT);
             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_HASH_CALC);
+#ifdef LIBSSH2_ERROR_STORE_OVERFLOW
             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_STORE_OVERFLOW);
+#endif
 
         default:
             return replaceCpy<std::wstring>(L"SSH status %x", L"%x", numberTo<std::wstring>(sc));

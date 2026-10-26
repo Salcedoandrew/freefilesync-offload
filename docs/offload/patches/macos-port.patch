@@ -1,0 +1,384 @@
+diff --git a/FreeFileSync/Source/afs/native.cpp b/FreeFileSync/Source/afs/native.cpp
+index 6cf0fdc..d2f0c20 100644
+--- a/FreeFileSync/Source/afs/native.cpp
++++ b/FreeFileSync/Source/afs/native.cpp
+@@ -17,7 +17,11 @@
+ #include "abstract_impl.h"
+ #include "../base/icon_loader.h"
+ 
++#if defined(__APPLE__)
++    #include <sys/mount.h> //statfs
++#else
+     #include <sys/vfs.h> //statfs
++#endif
+ 
+     #include <sys/stat.h>
+     #include <dirent.h>
+diff --git a/libssh2/libssh2_wrap.h b/libssh2/libssh2_wrap.h
+index 0a55b96..f8bdb21 100644
+--- a/libssh2/libssh2_wrap.h
++++ b/libssh2/libssh2_wrap.h
+@@ -195,7 +195,9 @@ std::wstring formatSshStatusCode(int sc)
+             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_MAC_FAILURE);
+             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_HASH_INIT);
+             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_HASH_CALC);
++#ifdef LIBSSH2_ERROR_STORE_OVERFLOW
+             ZEN_CASE_RETURN_STRING(LIBSSH2_ERROR_STORE_OVERFLOW);
++#endif
+ 
+         default:
+             return replaceCpy<std::wstring>(L"SSH status %x", L"%x", numberTo<std::wstring>(sc));
+diff --git a/zen/file_access.cpp b/zen/file_access.cpp
+index 3194935..0a7a6e7 100644
+--- a/zen/file_access.cpp
++++ b/zen/file_access.cpp
+@@ -15,7 +15,12 @@
+ #include "guid.h"
+ #include "ring_buffer.h"
+ 
++#if defined(__APPLE__)
++    #include <sys/mount.h>    //statfs
++    #include <sys/statvfs.h> //statvfs
++#else
+     #include <sys/vfs.h> //statfs
++#endif
+     #ifdef HAVE_SELINUX
+         #include <selinux/selinux.h>
+     #endif
+diff --git a/zen/file_io.cpp b/zen/file_io.cpp
+index 0a119b4..14cb6c7 100644
+--- a/zen/file_io.cpp
++++ b/zen/file_io.cpp
+@@ -133,8 +133,12 @@ FileInputPlain::FileInputPlain(FileHandle handle, const Zstring& filePath) :
+     FileBase(handle, filePath)
+ {
+     //optimize read-ahead on input file:
++#if !defined(__APPLE__)
+     if (::posix_fadvise(getHandle(), 0 /*offset*/, 0 /*len*/, POSIX_FADV_SEQUENTIAL) != 0) //"len == 0" means "end of the file"
+         THROW_LAST_FILE_ERROR(replaceCpy(_("Cannot read file %x."), L"%x", fmtPath(filePath)), "posix_fadvise(POSIX_FADV_SEQUENTIAL)");
++#else
++    //macOS has no posix_fadvise(); F_RDADVISE would need an explicit struct radvisory, not worth it here
++#endif
+ 
+     /*  - POSIX_FADV_SEQUENTIAL is like POSIX_FADV_NORMAL, but with twice the read-ahead buffer size
+         - POSIX_FADV_NOREUSE "since  kernel  2.6.18 this flag is a no-op" WTF!?
+diff --git a/zen/file_path.cpp b/zen/file_path.cpp
+index 84d8d9e..492d73e 100644
+--- a/zen/file_path.cpp
++++ b/zen/file_path.cpp
+@@ -7,6 +7,10 @@
+ #include "file_path.h"
+ #include "zstring.h"
+     #include <unistd.h>
++#if defined(__APPLE__)
++    #include <crt_externs.h>
++    #define environ (*_NSGetEnviron()) //macOS: environ is not a plain linker symbol
++#endif
+ 
+ using namespace zen;
+ 
+diff --git a/zen/format_unit.cpp b/zen/format_unit.cpp
+index 7094976..f13f065 100644
+--- a/zen/format_unit.cpp
++++ b/zen/format_unit.cpp
+@@ -5,6 +5,9 @@
+ // *****************************************************************************
+ 
+ #include "format_unit.h"
++#if defined(__APPLE__)
++    #include <CoreFoundation/CoreFoundation.h> //CFLocaleFirstWeekday
++#endif
+ #include "basic_math.h"
+ #include "sys_error.h"
+ #include "i18n.h"
+@@ -210,10 +213,22 @@ WeekDay impl::getFirstDayOfWeekImpl() //throw SysError
+         ---------------------------------------
+         LC_TIME=en_DK.utf8    => Monday
+         LC_TIME=en_US.utf8    => Sunday       */
++#if defined(__APPLE__)
++    //macOS has no _NL_TIME_FIRST_WEEKDAY: ask the current CFLocale instead, same [1-Sunday, 7-Saturday] range
++    int weekDayStartSunday = 1;
++    if (const CFCalendarRef cal = ::CFCalendarCopyCurrent())
++    {
++        ZEN_ON_SCOPE_EXIT(::CFRelease(cal));
++        const int firstDay = ::CFCalendarGetFirstWeekday(cal); //[1-Sunday, 7-Saturday]
++        if (1 <= firstDay && firstDay <= 7)
++            weekDayStartSunday = firstDay;
++    }
++#else
+     const char* firstDay = ::nl_langinfo(_NL_TIME_FIRST_WEEKDAY); //[1-Sunday, 7-Saturday]
+     ASSERT_SYSERROR(firstDay && 1 <= *firstDay && *firstDay <= 7);
+ 
+     const int weekDayStartSunday = *firstDay;                        //[1-Sunday, 7-Saturday]
++#endif
+     const int weekDayStartMonday = (weekDayStartSunday - 2 + 7) % 7; //[0-Monday, 6-Sunday]  7 == 0 in Z_7
+ 
+     return static_cast<WeekDay>(weekDayStartMonday);
+diff --git a/zen/guid.h b/zen/guid.h
+index e31a8d6..1851fde 100644
+--- a/zen/guid.h
++++ b/zen/guid.h
+@@ -7,6 +7,9 @@
+ 
+     #include <fcntl.h> //open
+     #include <unistd.h> //close, getentropy
++#if defined(__APPLE__)
++    #include <sys/random.h> //getentropy lives here on macOS
++#endif
+     #include <zen/sys_error.h>
+     //#include <uuid/uuid.h> -> uuid_generate(), uuid_unparse(); avoid additional dependency for "sudo apt-get install uuid-dev"
+ 
+@@ -17,6 +20,11 @@ std::string generateGUID() //creates a 16-byte GUID
+ {
+     std::string guid(16, '\0');
+ 
++#if defined(__APPLE__)
++    if (::getentropy(guid.data(), guid.size()) != 0)  //macOS: available since 10.12, same 256-byte cap
++        throw std::runtime_error(std::string(__FILE__) + '[' + numberTo<std::string>(__LINE__) + "] Failed to generate GUID." + "\n\n" +
++                                 utfTo<std::string>(formatSystemError("getentropy", errno)));
++#else //Linux: getentropy() arrived with Glibc 2.25
+ #ifndef __GLIBC_PREREQ
+ #error Where is Glibc?
+ #endif
+@@ -42,7 +50,8 @@ std::string generateGUID() //creates a 16-byte GUID
+         offset += bytesRead;
+         assert(offset <= guid.size());
+     }
+-#endif
++#endif //__GLIBC_PREREQ
++#endif //__APPLE__
+     return guid;
+ 
+ }
+diff --git a/zen/process_exec.cpp b/zen/process_exec.cpp
+index 31420f1..51f192a 100644
+--- a/zen/process_exec.cpp
++++ b/zen/process_exec.cpp
+@@ -87,8 +87,16 @@ std::pair<int /*exit code*/, std::string> processExecuteImpl(const Zstring& file
+     //--------------------------------------------------------------
+     //waitpid() is a useless pile of garbage without time out => check EOF from dummy pipe instead
+     int pipe[2] = {};
++#if defined(__APPLE__)
++    if (::pipe(pipe) != 0)
++        THROW_LAST_SYS_ERROR("pipe");
++    for (const int fd : pipe)
++        if (::fcntl(fd, F_SETFD, FD_CLOEXEC) != 0)
++            THROW_LAST_SYS_ERROR("fcntl(FD_CLOEXEC)");
++#else
+     if (::pipe2(pipe, O_CLOEXEC) != 0)
+         THROW_LAST_SYS_ERROR("pipe2");
++#endif
+ 
+     const int fdLifeSignR = pipe[0]; //for parent process
+     const int fdLifeSignW = pipe[1]; //for child process
+diff --git a/zen/process_priority.cpp b/zen/process_priority.cpp
+index 9cffe97..296edc2 100644
+--- a/zen/process_priority.cpp
++++ b/zen/process_priority.cpp
+@@ -46,6 +46,24 @@ void setCpuPriority(int prio) //throw SysError
+ #endif
+ //---------------------------------------------------------------------------------------------------
+ 
++#if defined(__APPLE__)
++//macOS has no ioprio: PRIO_DARWIN_BG throttles this process's CPU and I/O the same way
++int getIoPriority() //throw SysError
++{
++    errno = 0;
++    const int prio = ::getpriority(PRIO_DARWIN_PROCESS, 0);
++    if (prio == -1 && errno != 0)
++        THROW_LAST_SYS_ERROR("getpriority");
++    return prio;
++}
++
++
++void setIoPriority(int ioPrio) //throw SysError
++{
++    if (::setpriority(PRIO_DARWIN_PROCESS, 0, ioPrio) != 0)
++        THROW_LAST_SYS_ERROR("setpriority(" + numberTo<std::string>(ioPrio) + ')');
++}
++#else
+ //- required functions ioprio_get/ioprio_set are not part of glibc: https://linux.die.net/man/2/ioprio_set
+ //- and probably never will: https://sourceware.org/bugzilla/show_bug.cgi?id=4464
+ //https://github.com/torvalds/linux/blob/master/include/uapi/linux/ioprio.h
+@@ -91,6 +109,7 @@ void setIoPriority(int ioPrio) //throw SysError
+     if (::syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, ::getpid(), ioPrio) != 0)
+         THROW_LAST_SYS_ERROR("ioprio_set(0x" + printNumber<std::string>("%x", static_cast<unsigned int>(ioPrio)) + ')');
+ }
++#endif //__APPLE__
+ }
+ 
+ 
+@@ -108,7 +127,11 @@ SetProcessPriority::SetProcessPriority(ProcessPriority prio) : //throw FileError
+         {
+             pimpl_->oldIoPrio = getIoPriority(); //throw SysError
+ 
++#if defined(__APPLE__)
++            setIoPriority(PRIO_DARWIN_BG); //throw SysError
++#else
+             setIoPriority(IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 6 /*0 (highest) to 7 (lowest)*/)); //throw SysError
++#endif
+             //maybe even IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0)  ? nope: "only served when no one else is using the disk"
+         }
+         catch (const SysError& e) { throw FileError(_("Cannot change process I/O priorities."), e.toString()); }
+diff --git a/zen/shutdown.cpp b/zen/shutdown.cpp
+index 5c72964..20949de 100644
+--- a/zen/shutdown.cpp
++++ b/zen/shutdown.cpp
+@@ -5,6 +5,9 @@
+ // *****************************************************************************
+ 
+ #include "shutdown.h"
++#if defined(__APPLE__)
++    #include <unistd.h> //_exit
++#endif
+ #include "thread.h"
+ #include "file_error.h"
+     #include <zen/process_exec.h>
+@@ -52,7 +55,11 @@ void zen::suspendSystem() //throw FileError
+ 
+ void zen::terminateProcess(int exitCode)
+ {
++#if defined(__APPLE__)
++    ::_exit(exitCode); //macOS libc has no quick_exit(); _exit() has the same "skip atexit/static destructors" semantics
++#else
+     std::quick_exit(exitCode); //[[noreturn]]; "Causes normal program termination to occur without completely cleaning the resources." => perfect
++#endif
+ 
+ 
+     for (;;) //why still here?? => crash deliberately!
+diff --git a/zen/socket.h b/zen/socket.h
+index 09d06a0..7b1c2a0 100644
+--- a/zen/socket.h
++++ b/zen/socket.h
+@@ -31,24 +31,40 @@ std::wstring formatGaiErrorCode(int ec)
+ {
+     switch (ec) //codes used on both Linux and macOS
+     {
++#ifdef EAI_ADDRFAMILY
+             ZEN_CASE_RETURN_STRING(EAI_ADDRFAMILY);
++#endif
+             ZEN_CASE_RETURN_STRING(EAI_AGAIN);
+             ZEN_CASE_RETURN_STRING(EAI_BADFLAGS);
+             ZEN_CASE_RETURN_STRING(EAI_FAIL);
+             ZEN_CASE_RETURN_STRING(EAI_FAMILY);
+             ZEN_CASE_RETURN_STRING(EAI_MEMORY);
++#ifdef EAI_NODATA
+             ZEN_CASE_RETURN_STRING(EAI_NODATA);
++#endif
+             ZEN_CASE_RETURN_STRING(EAI_NONAME);
+             ZEN_CASE_RETURN_STRING(EAI_SERVICE);
+             ZEN_CASE_RETURN_STRING(EAI_SOCKTYPE);
+             ZEN_CASE_RETURN_STRING(EAI_SYSTEM);
+             ZEN_CASE_RETURN_STRING(EAI_OVERFLOW);
++#ifdef EAI_INPROGRESS
+             ZEN_CASE_RETURN_STRING(EAI_INPROGRESS);
++#endif
++#ifdef EAI_CANCELED
+             ZEN_CASE_RETURN_STRING(EAI_CANCELED);
++#endif
++#ifdef EAI_NOTCANCELED
+             ZEN_CASE_RETURN_STRING(EAI_NOTCANCELED);
++#endif
++#ifdef EAI_ALLDONE
+             ZEN_CASE_RETURN_STRING(EAI_ALLDONE);
++#endif
++#ifdef EAI_INTR
+             ZEN_CASE_RETURN_STRING(EAI_INTR);
++#endif
++#ifdef EAI_IDN_ENCODE
+             ZEN_CASE_RETURN_STRING(EAI_IDN_ENCODE);
++#endif
+         default:
+             return replaceCpy(_("Error code %x"), L"%x", numberTo<std::wstring>(ec));
+     }
+@@ -107,6 +123,16 @@ public:
+ 
+         const auto getConnectedSocket = [timeoutSec](const auto& /*addrinfo*/ ai)
+         {
++#if defined(__APPLE__)
++            SocketType testSocket = ::socket(ai.ai_family,      //int socket_family
++                                             ai.ai_socktype,    //int socket_type: macOS rejects SOCK_NONBLOCK/SOCK_CLOEXEC here
++                                             ai.ai_protocol);   //int protocol
++            if (testSocket == invalidSocket)
++                THROW_LAST_SYS_ERROR_WSA("socket");
++            ZEN_ON_SCOPE_FAIL(closeSocket(testSocket));
++            ::fcntl(testSocket, F_SETFL, ::fcntl(testSocket, F_GETFL) | O_NONBLOCK);
++            ::fcntl(testSocket, F_SETFD, FD_CLOEXEC);
++#else
+             SocketType testSocket = ::socket(ai.ai_family,    //int socket_family
+                                              SOCK_CLOEXEC | SOCK_NONBLOCK |
+                                              ai.ai_socktype,  //int socket_type
+@@ -114,6 +140,7 @@ public:
+             if (testSocket == invalidSocket)
+                 THROW_LAST_SYS_ERROR_WSA("socket");
+             ZEN_ON_SCOPE_FAIL(closeSocket(testSocket));
++#endif
+ 
+             if (::connect(testSocket, ai.ai_addr, static_cast<int>(ai.ai_addrlen)) != 0) //0 or SOCKET_ERROR(-1)
+             {
+diff --git a/zen/sys_error.cpp b/zen/sys_error.cpp
+index d99e972..36aae0f 100644
+--- a/zen/sys_error.cpp
++++ b/zen/sys_error.cpp
+@@ -14,6 +14,11 @@ namespace
+ {
+ std::wstring formatSystemErrorCode(ErrorCode ec)
+ {
++#if defined(__APPLE__)
++    //macOS errno vocabulary is not the Linux one (no ECHRNG/EL2NSYNC/... and different numbering),
++    //so the table below would be incomplete and partly misleading: strerror() is authoritative here.
++    return utfTo<std::wstring>(::strerror(ec));
++#else
+     switch (ec) //pretty much all codes currently used on CentOS 7 and macOS 10.15
+     {
+             ZEN_CASE_RETURN_STRING(EPERM);
+@@ -151,6 +156,7 @@ std::wstring formatSystemErrorCode(ErrorCode ec)
+         default:
+             return replaceCpy(_("Error code %x"), L"%x", numberTo<std::wstring>(ec));
+     }
++#endif //__APPLE__
+ }
+ }
+ 
+diff --git a/zen/sys_info.cpp b/zen/sys_info.cpp
+index f9df0b7..34e3ddd 100644
+--- a/zen/sys_info.cpp
++++ b/zen/sys_info.cpp
+@@ -14,7 +14,9 @@
+     #include "file_io.h"
+     #include <ifaddrs.h>
+     #include <net/if.h> //IFF_LOOPBACK
++#if !defined(__APPLE__)
+     #include <netpacket/packet.h> //sockaddr_ll
++#endif
+ 
+ 
+     #include "process_exec.h"
+diff --git a/zen/thread.cpp b/zen/thread.cpp
+index bd84ac6..7712cc3 100644
+--- a/zen/thread.cpp
++++ b/zen/thread.cpp
+@@ -6,7 +6,11 @@
+ 
+ #include "thread.h"
+ #include "globals.h"
++#if defined(__APPLE__)
++    #include <pthread.h> //pthread_setname_np
++#else
+     #include <sys/prctl.h>
++#endif
+ 
+ using namespace zen;
+ 
+@@ -15,7 +19,11 @@ using namespace zen;
+ 
+ void zen::setCurrentThreadName(const Zstring& threadName)
+ {
++#if defined(__APPLE__)
++    ::pthread_setname_np(threadName.c_str()); //macOS: current thread only, 63 bytes max
++#else
+     ::prctl(PR_SET_NAME, threadName.c_str(), 0, 0, 0);
++#endif
+ 
+ }
+ 
