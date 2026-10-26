@@ -3,6 +3,10 @@
 Everything this fork adds on top of **FreeFileSync v14.12** (upstream commit
 `53143e29`, 2026-09-09). Newest first. All work landed on 2026-10-25 and 2026-10-26.
 
+Every date here is the calendar day a release went out, in America/Los_Angeles, so the
+same date as the release page read from here. GitHub timestamps its releases in UTC,
+which puts the evening releases of the 25th on the 26th.
+
 Two things it does not do: the FreeFileSync GUI still does not build on macOS, and
 nothing here is upstreamed (upstream is a read-only mirror).
 
@@ -41,7 +45,7 @@ what moved and how fast.**
 - A release is now cut only after CI goes green, and a run whose newest commit is not the
   version bump is refused rather than published without those commits.
 
-## 0.7.0 — 2026-10-26
+## 0.7.0 — 2026-10-25
 
 **A damaged photo now fails the run instead of disappearing into it, the updater cannot
 install a release it cannot check, and every transfer row says how fast it is going and

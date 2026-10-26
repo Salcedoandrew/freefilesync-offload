@@ -201,15 +201,19 @@ once, so throughput is bounded by the slowest destination, not by the source.
 | Version | Date | What changed |
 |---|---|---|
 | [v0.8.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.8.0) | 2026-10-26 | Add queues and Transfer starts; a receipt when a run ends; the download's note names its own version |
-| [v0.7.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.7.0) | 2026-10-26 | A damaged photo fails the run; the updater refuses a release it cannot verify; per-row speeds and pause |
+| [v0.7.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.7.0) | 2026-10-25 | A damaged photo fails the run; the updater refuses a release it cannot verify; per-row speeds and pause |
 | [v0.6.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.6.0) | 2026-10-25 | A hash cache, so a second run does not re-hash the card; broken files flagged rather than filed |
 | [v0.5.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.5.0) | 2026-10-25 | Check for Updates, and an update that replaces the app in place |
-| [v0.4.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.4.0) | 2026-10-26 | Packaged, self-contained, signed app on the release; mouse-driven UI tests |
+| [v0.4.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.4.0) | 2026-10-25 | Packaged, self-contained, signed app on the release; mouse-driven UI tests |
 | [v0.3.1](https://github.com/Salcedoandrew/freefilesync-offload/releases) | 2026-10-25 | Destination fit check: refuses a drive that cannot hold the card |
 | [v0.3.0](https://github.com/Salcedoandrew/freefilesync-offload/releases) | 2026-10-25 | The window, the C ABI, CSV/MHL reports, the `.app` bundle |
 | [v0.2.1](https://github.com/Salcedoandrew/freefilesync-offload/releases) | 2026-10-25 | `--hash` selection, pause/resume, a stale-object crash fix |
 | [v0.2.0](https://github.com/Salcedoandrew/freefilesync-offload/releases) | 2026-10-25 | The headless engine: 107 assertions, 221 files verified end to end |
 | [v0.1.0](https://github.com/Salcedoandrew/freefilesync-offload/releases) | 2026-10-25 | The macOS port: 125 lines, all inside `__APPLE__` |
+
+Dates are the day each release went out, in America/Los_Angeles, the same convention as
+the changelog. GitHub stamps releases in UTC, so an evening release shows there on the
+following day.
 
 ## Licence
 
