@@ -195,6 +195,12 @@ void HashCache::store(const Zstring& relPath, uint64_t size, time_t modTime,
     dirty_ = true;
 }
 
+void HashCache::erase(const Zstring& relPath)
+{
+    if (entries_.erase(relPath) > 0)
+        dirty_ = true; //the removal must reach the file on save
+}
+
 std::string HashCache::save(const Zstring& filePath)
 {
     std::ostringstream out;

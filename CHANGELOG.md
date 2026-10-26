@@ -18,11 +18,13 @@ broken-file check, so a corrupt photo is flagged instead of silently filed.**
   root: the hash of every file verified there, keyed by file name, size and
   modification date, with the algorithm recorded alongside. A second run
   skips what is already there *and* confirms it from the cache instead of
-  trusting name, size and date alone, and `--reverify` only re-hashes files
-  whose size or date moved. The cache format is versioned, so a future format
-  change never silently trusts old entries, and the cache file itself is never
-  copied as data. A cache that cannot be saved is a warning, never a failure:
-  the next run just re-hashes.
+  trusting name, size and date alone. `--reverify` never takes a hash from
+  the cache: it always re-hashes every file, so a content change that keeps
+  size and date is still caught, and a mismatch drops the stale entry so it
+  can never be trusted again. The cache format is versioned, so a future
+  format change never silently trusts old entries, and the cache file itself
+  is never copied as data. A cache that cannot be saved is a warning, never
+  a failure: the next run just re-hashes.
 - **Broken-file check.** During the source scan, photo and RAW files are
   judged at the header level only — JPEG (SOI marker and the marker after it),
   PNG (signature, IHDR, and the IEND chunk at the end), TIFF (byte order,
@@ -37,13 +39,14 @@ broken-file check, so a corrupt photo is flagged instead of silently filed.**
   columns; the JSON report gains a `broken` count and cache hit/miss counts.
 
 ### Notes
-- **Same size and date, different bytes, is invisible to the cache.** If a
-  file on a destination changes content without its size or modification date
-  moving, `--reverify` trusts the cached hash. That is the same trust
-  Duplicate Detect already places in the date, and the price of not
-  re-hashing everything — but a re-verify after a warm cache is no longer a
-  byte-level proof for such a file. Delete `.ffsoffload-cache` on a
-  destination to force a full re-hash.
+- **Same size and date, different bytes, is invisible to the cache — but not
+  to `--reverify`.** If a file on a destination changes content without its
+  size or modification date moving, the already-present check still confirms
+  it from the cache: that is the same trust Duplicate Detect already places
+  in the date, and the price of not re-hashing every file on every run.
+  `--reverify` always re-hashes, so it catches the change and drops the
+  stale entry; delete `.ffsoffload-cache` on a destination to force a full
+  re-hash of the already-present check too.
 - A dry run reads the cache but never writes one.
 
 ## 0.5.0 — 2026-10-25

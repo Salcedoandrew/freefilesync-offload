@@ -355,8 +355,9 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
 
     //hashes we proved on an earlier run: a matching entry (same path, size,
     //mtime and algorithm) means the copy on this destination is already
-    //hash-confirmed, so neither --reverify nor Duplicate Detect has to hash
-    //it again. A missing or unreadable cache is just an empty one.
+    //hash-confirmed, so Duplicate Detect does not have to hash it again.
+    //--reverify never consults the cache (see below): it always hashes
+    //fresh. A missing or unreadable cache is just an empty one.
     HashCache cache;
     cache.load(appendSeparator(dest.destRoot) + kCacheFileName);
 
@@ -414,11 +415,12 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         const Zstring srcPath = appendSeparator(opts.sourceRoot) + f.relPath;
         Zstring       dstRel  = f.relPath;
 
-        //re-verification hashes what is actually on the destination and must not be
-        //short-circuited by Duplicate Detect (name+size+mtime can't see bit rot).
-        //The cache short-circuits only the destination side, and only when the
-        //entry still matches the file's size and mtime: the source is always
-        //hashed fresh, because it is the ground truth.
+        //re-verification hashes what is actually on the destination and must
+        //never be short-circuited by the cache: a file whose bytes changed
+        //while size and mtime stayed put is invisible to a size+mtime key, so
+        //a cached hash is not a proof. The cache serves only the
+        //already-present check below. The source is always hashed fresh too,
+        //because it is the ground truth.
         if (opts.reverifyOnly)
         {
             FileRecord rec = baseRecord(f);
@@ -440,27 +442,19 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
             {
                 const DestEntry& de = destIndex[f.relPath];
                 std::string dstHash;
-                bool dstOk = false; //the destination hash is known (cached or just hashed)
-                if (const auto hit = cache.lookup(f.relPath, de.size, de.modTime, opts.hashAlgo))
+                bool dstOk = false; //the destination was hashed fresh
+                //always re-hash: --reverify is the byte-level proof
+                Hasher dstHasher(opts.hashAlgo);
+                if (!hashFile(reverifyPath, dstHasher, err, &sink))
                 {
-                    dstHash = *hit;
-                    ++dest.cacheHits;
-                    dstOk = true;
+                    rec.state = FileState::failed;
+                    rec.error = "destination: " + err;
                 }
                 else
                 {
-                    Hasher dstHasher(opts.hashAlgo);
-                    if (!hashFile(reverifyPath, dstHasher, err, &sink))
-                    {
-                        rec.state = FileState::failed;
-                        rec.error = "destination: " + err;
-                    }
-                    else
-                    {
-                        dstHash = dstHasher.hex();
-                        ++dest.cacheMisses;
-                        dstOk = true;
-                    }
+                    dstHash = dstHasher.hex();
+                    ++dest.cacheMisses;
+                    dstOk = true;
                 }
 
                 if (dstOk)
@@ -469,14 +463,17 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
                     if (srcHasher.hex() == dstHash)
                     {
                         rec.state = FileState::verified;
-                        //the destination hash is now proven: remember it, so
-                        //the next re-verify does not hash this file again
+                        //the destination hash is now proven fresh: remember
+                        //it, so a later already-present check can confirm it
                         cache.store(f.relPath, de.size, de.modTime, opts.hashAlgo, dstHash);
                     }
                     else
                     {
                         rec.state = FileState::mismatch;
                         rec.error = "hash differs: source " + rec.hash + ", destination " + dstHash;
+                        //the cached entry (if any) claimed this file was
+                        //fine: drop it, so it can never be trusted again
+                        cache.erase(f.relPath);
                     }
                 }
             }

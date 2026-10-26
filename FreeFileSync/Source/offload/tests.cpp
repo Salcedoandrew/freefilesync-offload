@@ -259,19 +259,13 @@ void testCorruptionDetected()
     runJob(makeOptions(s, { destA }));
 
     //flip bytes inside the copy - the exact failure a bad cable or a dying
-    //drive produces. Then move the file's date an hour forward: the cache
-    //trusts size+date, so a content change that keeps both is invisible to
-    //it (see cache.h) - the date has to move for the entry to invalidate and
-    //the file to be re-hashed. A rewrite in the real world moves the date;
-    //the same-second rewrite here would not, so the move is explicit.
+    //drive produces. Size and date stay put on purpose: --reverify always
+    //re-hashes the destination fresh, so a content change that keeps both
+    //must still be caught (the cache is never consulted there, see cache.h).
     const Zstring victim = appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0002.JPG");
     std::string bytes = readText(victim);
     bytes[100] = static_cast<char>(bytes[100] ^ 0xFF);
     writeText(victim, bytes);
-    const auto then = std::filesystem::last_write_time(
-        std::filesystem::path(zen::utfTo<std::string>(victim)));
-    std::filesystem::last_write_time(
-        std::filesystem::path(zen::utfTo<std::string>(victim)), then + std::chrono::hours(1));
 
     Options o = makeOptions(s, { destA });
     o.reverifyOnly = true;
@@ -287,6 +281,12 @@ void testCorruptionDetected()
             zen::utfTo<std::string>(f.relPath).find("IMG_0002") != std::string::npos)
             found = true;
     check(found, "mismatch attributed to the corrupted file");
+
+    //the mismatch also drops the stale cache entry, so a later run can never
+    //trust the corrupted file as "hash-confirmed"
+    const std::string cacheText = readText(appendSeparator(destA) + Zstr(".ffsoffload-cache"));
+    check(cacheText.find("IMG_0002.JPG") == std::string::npos,
+          "the corrupted file's cache entry is gone after the mismatch");
 }
 
 //------------------------------------------------------ name clash never overwrites
@@ -883,13 +883,17 @@ void testHashCache()
             allConfirmed = allConfirmed && f.hashConfirmed && !f.hash.empty();
         check(allConfirmed, "every skipped file is hash-confirmed with its digest");
 
-        //re-verify takes the destination hashes from the cache
+        //re-verify hashes every destination file fresh: the cache is never
+        //consulted there, so a content change that keeps size+date is caught
         Options o = makeOptions(s, { destA });
         o.reverifyOnly = true;
         const JobReport reverify = runJob(o);
         check(allVerified(reverify), "re-verify verifies");
         check(reverify.dests[0].verified == 4, "re-verify verifies all four");
-        check(reverify.dests[0].cacheHits == 4, "re-verify takes all four destination hashes from the cache");
+        check(reverify.dests[0].cacheHits == 0, "re-verify takes no destination hash from the cache (got " +
+              std::to_string(reverify.dests[0].cacheHits) + ")");
+        check(reverify.dests[0].cacheMisses == 4, "re-verify re-hashes all four (got " +
+              std::to_string(reverify.dests[0].cacheMisses) + ")");
     }
 
     //--- invalidation by mtime: one moved file re-copies, the rest still hit

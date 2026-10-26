@@ -63,7 +63,8 @@ struct DestReport
     size_t failed = 0;
     size_t broken = 0;     //files whose source header failed the media check
     size_t cacheHits = 0;  //destination hashes taken from the cache, not re-hashed
-    size_t cacheMisses = 0; //cache lookups that missed (no entry, or size/mtime/algo moved)
+    size_t cacheMisses = 0; //files hashed fresh instead of taken from the cache
+                            //(lookup missed, or --reverify, which never consults it)
     std::string cacheError; //non-empty when the hash cache could not be saved
     uint64_t bytesCopied = 0; //bytes this run actually wrote
     size_t filesWritten = 0;   //files this run actually wrote (copied or verified)

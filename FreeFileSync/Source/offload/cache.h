@@ -4,20 +4,27 @@
 // * One cache file per destination (".ffsoffload-cache" at the destination      *
 // * root) remembers the hash of every file we have verified there, keyed by    *
 // * relative path + size + mtime. A later run can then trust a matching entry  *
-// * instead of re-hashing the whole destination: --reverify only re-hashes     *
-// * files whose size or mtime changed, and Duplicate Detect can say            *
+// * instead of re-hashing the whole destination: Duplicate Detect can say      *
 // * "already present, hash-confirmed" instead of trusting name+size+mtime      *
-// * alone (the weak spot audit finding S7 called out).                         *
+// * alone (the weak spot audit finding S7 called out). That is the cache's     *
+// * whole job: it accelerates the already-present check.                        *
+// *                                                                            *
+// * --reverify never consults the cache: it always hashes the destination      *
+// * fresh, because a file whose bytes change while size AND mtime stay put is  *
+// * invisible to a size+mtime key, and --reverify is the byte-level proof. A   *
+// * mismatch also drops the stale entry, so it can never be trusted again.     *
 // *                                                                            *
 // * The format is versioned, so a future format change never silently trusts   *
 // * stale entries: a cache whose version line we do not recognise is ignored   *
 // * wholesale and rebuilt. An entry is only trusted when size, mtime and       *
 // * algorithm all match; anything else is a miss and the file is re-hashed.    *
 // *                                                                            *
-// * Known limit, stated plainly: a file whose bytes change while size AND       *
-// * mtime stay put is invisible to the cache, so --reverify trusts it. That is  *
-// * the same trust Duplicate Detect already places in mtime, and the price of   *
-// * not re-hashing every file on every run.                                     *
+// * Known limit, stated plainly: the same size+mtime trust still bounds the    *
+// * already-present check — a destination file whose bytes changed with size    *
+// * and mtime unmoved still confirms from the cache. That is the same trust    *
+// * Duplicate Detect already places in the date, and the price of not          *
+// * re-hashing every file on every run. --reverify has no such blind spot:     *
+// * it always re-hashes, so the corruption is caught there.                     *
 // *****************************************************************************
 #pragma once
 
@@ -52,6 +59,10 @@ public:
 
     void store(const Zstring& relPath, uint64_t size, time_t modTime,
                HashAlgo algo, const std::string& hash);
+
+    //Drops an entry, if present. Used when a fresh hash proves the cached
+    //one wrong: the stale entry must not survive as trusted.
+    void erase(const Zstring& relPath);
 
     bool empty() const { return entries_.empty(); }
     bool dirty() const { return dirty_; }
