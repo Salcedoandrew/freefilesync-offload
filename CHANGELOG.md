@@ -29,6 +29,16 @@ nothing here is upstreamed (upstream is a read-only mirror).
   `--update-test` and `--update-selftest <feed>` for the terminal.
 - `make zip` now writes `SHA256SUMS.txt`, which is what the updater checks against.
 
+### Fixed
+- **A failed source scan no longer reports "Completed".** The engine used to swallow a
+  scan error and hand the window a report that looked like success; the window now fails
+  the transfer and shows the reason, and the CLI prints it too. The same hole in
+  `--self-test` is fixed.
+- **Copies now publish atomically.** Each file is written to a temporary `.ffs_tmp` name
+  and renamed into place only once its hash is verified, so a crash mid-copy can no
+  longer leave a partial file at its real name. Stale temp files are cleaned up at the
+  start of a run and skipped by the scanner.
+
 ### Verified
 - `38/38 update checks pass` (`--update-test`): version ordering incl. `0.10.0` > `0.9.0` and
   `1.0` == `1.0.0`; feed decoding; pre-release and zip-less releases refused; `shasum` output
