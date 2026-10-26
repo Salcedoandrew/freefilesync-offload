@@ -12,6 +12,45 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.10.0 — 2026-10-26
+
+**A card can be copied without its proxies, and filed where you will look for it.**
+
+### Added
+- **Skip patterns.** A Skip field in the Transfers panel takes patterns like
+  `*.LRV | *.THM | MISC/`, and the engine applies them inside the one walk that plans
+  the copy — so the fit check beside each destination counts what will actually be
+  copied, not what the card is holding. `*` and `?` are wildcards, a trailing `/`
+  prunes a whole folder, and matching ignores case, because cards mix `IMG_1.THM` and
+  `img_1.thm` freely. On the command line it is `--exclude`.
+- **A Subfolder field with date macros.** `%Date%` (2026-10-26), `%Year%`, `%Month%`,
+  `%Day%` and `%Card%`, with `/` nesting folders, so a shoot files itself under
+  `2026/10/26` without being typed. Blank keeps the card's own name, which is what it
+  did before the field existed.
+- **A fuller `--json` summary.** It now carries the totals a script should not have to
+  add up itself: verified, written, skipped, mismatch, failed, broken, bytes, the
+  report path, the verify mode and hash, and the skip patterns that shaped the run.
+- **An app icon**, so the app is not a blank page in the Dock and in Finder.
+
+### Notes
+- A Skip field that matches every file is refused rather than run. "Copied 0 files,
+  OK" is exactly how a card gets formatted for nothing, so the job fails by name.
+- The patterns are captured when a row is queued, not when Transfer is pressed:
+  editing the field afterwards cannot change a plan already pressed Add on, and the
+  report records the patterns the run really used.
+- Typing in Skip re-walks the sources once the typing stops, so the fit check follows
+  the field instead of answering a question the next run will not ask.
+- The matcher has no wx or glib dependency, so it builds and runs on its own:
+  `make -f Makefile.macos filter-test` runs 29 checks in about a second, and CI runs
+  them. The engine suite gained a Skip section that drives the real job, including
+  that the fit check and the copy agree file for file.
+- The updater's feed decision moved out of `performCheck` into `Updater.decision`, and
+  is now covered directly instead of being assumed: an 0.8.1 copy is offered the
+  feed's 0.9.0 with its archive and checksum, a current copy is told it is current, a
+  feed that lags behind never offers a downgrade, and 0.10.0 beats 0.9.0.
+
+---
+
 ## 0.9.0 — 2026-10-26
 
 **A finished run can be swept out of the window in one click.**
