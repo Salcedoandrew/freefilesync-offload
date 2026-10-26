@@ -8,6 +8,39 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.8.0 — 2026-10-26
+
+**Add queues the copies, Transfer starts them, and the run ends with a receipt that says
+what moved and how fast.**
+
+### Added
+- **A Transfer button.** Add now queues rows as `Ready`, with no engine job behind them;
+  the footer grows a Transfer button that starts them and disappears once nothing is
+  waiting. It takes the accent while rows are queued, with Add stepping back to a neutral
+  fill, so there is only ever one obvious thing to press.
+- **A confirmation window.** When every row a run started has finished, a sheet reports
+  the files and bytes moved, the rate the run sustained, and one line per destination
+  with its own count, rate and report folder. The rate is bytes over the engine's own
+  elapsed time, and the run's duration is its slowest row because rows copy side by side.
+  Damaged files turn the headline amber and are counted separately.
+- `--render summary` draws that window offscreen with a sample run, so it can be
+  screenshotted without copying anything.
+
+### Fixed
+- **The download's own instructions named the wrong version.** `HOW-TO-OPEN.txt` was
+  copied verbatim into the archive, so the 0.7.0 zip shipped a note whose header,
+  checksum command and limitations heading all still said 0.4.0. The note now carries
+  `@VERSION@` and `@ARCH@` placeholders that `make zip` fills from `Info.plist` and
+  `uname`, and the build refuses to package a note that does not name the archive it is
+  sitting in.
+
+### Notes
+- A queued row has no Pause button, because there is no job to hold back; cancelling one
+  retires the plan instead of leaving it to start on the next Transfer press. The
+  updater's "transfers are running" check ignores queued rows, since nothing is written.
+- A release is now cut only after CI goes green, and a run whose newest commit is not the
+  version bump is refused rather than published without those commits.
+
 ## 0.7.0 — 2026-10-26
 
 **A damaged photo now fails the run instead of disappearing into it, the updater cannot
