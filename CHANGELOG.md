@@ -1,12 +1,53 @@
 # Changelog
 
 Everything this fork adds on top of **FreeFileSync v14.12** (upstream commit
-`53143e29`, 2026-09-09). Newest first. All work landed on 2026-10-25.
+`53143e29`, 2026-09-09). Newest first. All work landed on 2026-10-25 and 2026-10-26.
 
 Two things it does not do: the FreeFileSync GUI still does not build on macOS, and
 nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
+
+## 0.7.0 — 2026-10-26
+
+**A damaged photo now fails the run instead of disappearing into it, the updater cannot
+install a release it cannot check, and every transfer row says how fast it is going and
+how much has moved.**
+
+### Added
+- **Transfer stats.** Each row reports bytes/sec, files/sec, `n of m files`, bytes done
+  of total and the ETA while it runs, then the counts and elapsed time when it finishes.
+  Pause/resume is a labelled **Pause**/**Continue** pill instead of a bare glyph, and a
+  paused row drops the rate and the ETA rather than leaving frozen numbers on screen.
+- A test that drives the updater's checksum gate in both directions: a release with no
+  sums asset is refused, one with a sums asset passes and hands its file back.
+
+### Fixed
+- **A damaged source file no longer lets the job claim success.** It is still copied
+  faithfully and still carries a plain-language reason in the report, but `allVerified()`
+  now returns false when a destination counted a damaged file: the CLI says how many
+  were damaged and exits 1, and the window names them instead of blaming the source scan.
+  The exit code is what a script checks before reformatting a card, so one corrupt JPEG
+  now stops that.
+- **A truncated report reads as incomplete.** `DestReport` carries `expectedFiles`, pinned
+  from the source count before any worker starts, and `allVerified()` requires exactly
+  that many records — a destination that dies mid-run no longer looks finished. Covered
+  by the new `testTruncatedReport`.
+- **The updater refuses to install without a checksum.** A release that published no
+  `SHA256SUMS.txt` used to skip verification entirely and install anyway; it is now
+  refused with `checksumMissing`, and the checksum asset's HTTP status is checked
+  instead of ignored.
+- **The C ABI no longer hands Swift pointers into live strings.** `offload_job_current_file`,
+  `offload_job_error` and `offload_job_report_csv` copy into a per-thread buffer while the
+  lock is held; the worker reassigning `currentFile` could previously free the buffer while
+  Swift was reading it.
+
+### Notes
+- The app's self-test fixture now writes a real CR3 header in front of its random payload.
+  Random bytes under a `.CR3` name are a damaged file, and that fixture exists to exercise
+  the transfer path.
+- `--allow-broken` is deliberately not here: a card known to hold a bad file can only be
+  recorded as failed for now.
 
 ## 0.6.0 — 2026-10-25
 
