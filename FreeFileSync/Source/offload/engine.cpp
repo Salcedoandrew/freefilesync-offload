@@ -94,6 +94,13 @@ struct Sink
     }
 };
 
+//Our own publish temp files: a run killed mid-copy leaves "name.ffs_tmp"
+//behind. They are not real files: never copy them, never index them.
+bool isTempFileName(const Zstring& itemName)
+{
+    return zen::endsWith(itemName, Zstr(".ffs_tmp"));
+}
+
 //Junk that lives on every camera card and must not be copied or counted.
 bool isCardJunk(const Zstring& itemName)
 {
@@ -138,6 +145,8 @@ void scanTree(const Zstring& absDir, const Zstring& relDir,
     {
         if (isCardJunk(fi.itemName))
             return;
+        if (isTempFileName(fi.itemName))
+            return; //a stale publish temp is not a file to copy or index
         const Zstring rel = joinRel(relDir, fi.itemName);
         filesOut.push_back({ rel, fi.fileSize, fi.modTime });
         mapOut[rel] = { fi.fileSize, fi.modTime };
@@ -184,8 +193,14 @@ bool copyAndHash(const Zstring& srcPath, const Zstring& dstPath,
     try
     {
         const auto in  = AFS::getInputStream (fff::createItemPathNative(srcPath));  //throw FileError
-        const auto out = AFS::getOutputStream(fff::createItemPathNative(dstPath),
-                                              size, modTime); //publishes via .ffs_tmp + rename
+
+        //Publish through a temp file in the same folder, then rename: a crash,
+        //kill or power cut mid-copy leaves a .ffs_tmp behind, never a partial
+        //at the final name. The temp is unlinked by ~FileOutputPlain if the
+        //copy throws; the rename below is atomic on one filesystem.
+        const Zstring tmpPath = dstPath + Zstr(".ffs_tmp");
+        const auto out = AFS::getOutputStream(fff::createItemPathNative(tmpPath),
+                                              size, modTime); //throw FileError
         const size_t blockSize = in->getBlockSize();
 
         Hasher hasher(opts.hashAlgo);
@@ -205,6 +220,17 @@ bool copyAndHash(const Zstring& srcPath, const Zstring& dstPath,
             sink.addBytes(n);
         }
         out->finalize(noProgress); //throw FileError
+        try
+        {
+            //no overwrite: the final name was checked against the destination
+            //index before copying, so an existing file here is a real conflict
+            zen::moveAndRenameItem(tmpPath, dstPath, false); //throw FileError, ErrorTargetExisting
+        }
+        catch (...)
+        {
+            try { removeFilePlain(tmpPath); } catch (const FileError&) {} //no orphan temp
+            throw;
+        }
         hashOut = hasher.hex();
         return true;
     }
@@ -254,9 +280,43 @@ void recordFailure(DestReport& dest, const SourceFile& f, FileState state, const
     dest.files.push_back(std::move(rec));
 }
 
+//Delete publish temps left by a run that was killed mid-copy. Without this the
+//next run's temp for the same file would collide (O_EXCL) and fail, and the
+//orphan would linger forever. Best-effort: a temp we cannot delete fails
+//loudly when its file is copied instead of failing the whole job here.
+void removeStaleTempsIn(const Zstring& absDir, size_t depth = 0)
+{
+    if (depth > 64)
+        return;
+    traverseFolder(absDir,
+                   [](const FileInfo& fi)
+    {
+        if (isTempFileName(fi.itemName))
+            try { removeFilePlain(fi.fullPath); } catch (const FileError&) {}
+    },
+    [&](const FolderInfo& fo)
+    {
+        removeStaleTempsIn(fo.fullPath, depth + 1);
+    },
+    [](const SymlinkInfo&) {}); //never follow a symlink out of the destination
+}
+
+void removeStaleTemps(const Zstring& destRoot)
+{
+    try
+    {
+        removeStaleTempsIn(appendSeparator(destRoot));
+    }
+    catch (const FileError&) { /*destination does not exist yet: nothing to clean*/ }
+}
+
 void runDestination(const Options& opts, const std::vector<SourceFile>& source,
                     DestReport& dest)
 {
+    //A previous run killed mid-copy leaves .ffs_tmp files behind; clear them
+    //before scanning, or the next temp for the same file collides (O_EXCL).
+    removeStaleTemps(dest.destRoot);
+
     //what is already there, for Duplicate Detect
     std::map<Zstring, DestEntry> destIndex;
     {
@@ -580,9 +640,17 @@ JobReport runJob(const Options& opts)
         }
         catch (const FileError& e)
         {
+            //A failed scan is a failure, not a cancellation: record the reason
+            //and run no destination, so no caller can read this as "completed".
             job.finishedAt = std::time(nullptr);
-            job.cancelled  = true;
-            return job; //unreadable source: nothing to do
+            job.error = zen::utfTo<std::string>(e.toString());
+            return job;
+        }
+        catch (const std::exception& e)
+        {
+            job.finishedAt = std::time(nullptr);
+            job.error = e.what();
+            return job;
         }
     }
     std::sort(source.begin(), source.end(), [](const SourceFile& l, const SourceFile& r) { return l.relPath < r.relPath; });

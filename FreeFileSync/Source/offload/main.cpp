@@ -292,6 +292,10 @@ int main(int argc, char** argv)
                     std::cout << "  FAIL " << zen::utfTo<std::string>(f.relPath)
                               << "  [" << getStateName(f.state) << "] " << f.error << "\n";
         }
+        //A failed source scan runs no destination, so there are no FAIL lines
+        //above at all: print the reason here instead of a bare "FAILED".
+        if (!job.error.empty())
+            std::cout << "  ERROR: " << job.error << "\n";
         std::cout << (allVerified(job) ? "OK: every file verified\n" : "FAILED: see failures above\n");
         std::cout << "elapsed " << elapsed << " s for " << totalFiles(job) << " file copies\n";
     }

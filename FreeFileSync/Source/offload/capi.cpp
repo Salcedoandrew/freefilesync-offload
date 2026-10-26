@@ -190,6 +190,10 @@ extern "C" OffloadJob* offload_job_start(const char* source, const char* dest, c
         {
             error = "unknown engine failure";
         }
+        //A scan failure is the primary failure: it outranks any report error,
+        //and without it offload_job_error() would stay empty while ok is 0.
+        if (error.empty())
+            error = r.error;
 
         //Reports are part of the deliverable, not an optional extra: the MHL goes
         //to the destination (archive-interoperable) and CSV/JSON to the report dir.

@@ -69,6 +69,9 @@ struct JobReport
     time_t startedAt = 0;
     time_t finishedAt = 0;
     bool cancelled = false;
+    //Job-level failure: the source could not be walked, so no destination ran.
+    //Empty when the scan succeeded; a job with an error here never verifies.
+    std::string error;
     bool dryRun = false;
     bool reverifyOnly = false;
 };

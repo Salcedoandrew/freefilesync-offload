@@ -294,6 +294,14 @@ final class Transfer: ObservableObject, Identifiable
             {
                 phase = .failed
             }
+            else if raw.ok == 0
+            {
+                //A failed source scan leaves no per-file record behind, so
+                //failedCount and errorText are both empty — but the engine still
+                //says the job did not verify. Never show green for that.
+                phase = .failed
+                if errorText.isEmpty { errorText = "the source could not be read" }
+            }
             else
             {
                 phase = .done

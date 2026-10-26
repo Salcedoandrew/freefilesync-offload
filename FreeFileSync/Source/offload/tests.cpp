@@ -513,6 +513,112 @@ void testMeasureSource()
     check(!missingErr.empty(), "failed measurement carries a reason");
 }
 
+//------------------------------------------------------- a failed scan is a failure
+//M1: a source that cannot be walked must produce an error report, never an
+//empty job that reads as "completed".
+void testScanFailure()
+{
+    std::cout << "scan failure\n";
+    Scratch s(Zstr("scanfailure"));
+    s.buildSource();
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    {
+        Options o = makeOptions(s, { destA });
+        o.sourceRoot = appendSeparator(s.root) + Zstr("NO-SUCH-CARD");
+        const JobReport job = runJob(o);
+
+        check(!job.error.empty(), "a missing source reports an error");
+        check(!job.cancelled, "a failed scan is not a cancellation");
+        check(job.dests.empty(), "a failed scan runs no destination");
+        check(!allVerified(job), "a failed scan does not claim success");
+        check(!itemExists(appendSeparator(destA) + Zstr("clip.mov")), "a failed scan writes nothing");
+    }
+    {
+        //a regular file where the source folder should be
+        const Zstring notAFolder = appendSeparator(s.root) + Zstr("NOT-A-FOLDER");
+        writeText(notAFolder, "not a folder");
+        Options o = makeOptions(s, { destA });
+        o.sourceRoot = notAFolder;
+        const JobReport job = runJob(o);
+
+        check(!job.error.empty(), "a file as source reports an error");
+        check(!job.cancelled, "a file as source is not a cancellation");
+        check(job.dests.empty(), "a file as source runs no destination");
+        check(!allVerified(job), "a file as source does not claim success");
+    }
+}
+
+//------------------------------------------------------------ temp file + rename
+size_t countTempsIn(const Zstring& absDir, size_t depth = 0)
+{
+    if (depth > 64)
+        return 0;
+    size_t n = 0;
+    traverseFolder(absDir,
+                   [&](const FileInfo& fi) { if (zen::endsWith(fi.itemName, Zstr(".ffs_tmp"))) ++n; },
+                   [&](const FolderInfo& fo) { n += countTempsIn(fo.fullPath, depth + 1); },
+                   [](const SymlinkInfo&) {});
+    return n;
+}
+
+//M2: a copy publishes through a .ffs_tmp file and rename, so no temp survives
+//a successful run and a partial is never visible at the final name.
+void testTempPublish()
+{
+    std::cout << "temp publish\n";
+    Scratch s(Zstr("temppublish"));
+    s.buildSource();
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    const JobReport job = runJob(makeOptions(s, { destA }));
+    check(allVerified(job), "temp-publish run verifies");
+    check(countTempsIn(destA) == 0, "no .ffs_tmp files remain after a successful copy");
+    check(itemExists(appendSeparator(destA) + Zstr("clip.mov")), "the published file is at its final name");
+    check(readText(appendSeparator(destA) + Zstr("clip.mov")) == pattern(250000), "the published file has the right bytes");
+}
+
+//M2: a stale temp left by a killed run must not block the next run, be mistaken
+//for a real file, or be copied along.
+void testStaleTemps()
+{
+    std::cout << "stale temps\n";
+    {
+        Scratch s(Zstr("staletemps"));
+        s.buildSource();
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+
+        //orphans from a run killed mid-copy, root and subfolder
+        writeText(appendSeparator(destA) + Zstr("clip.mov.ffs_tmp"), "partial garbage");
+        createDirectoryIfMissingRecursion(appendSeparator(destA) + Zstr("DCIM/100CANON"));
+        writeText(appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0001.JPG.ffs_tmp"), "partial garbage");
+
+        const JobReport job = runJob(makeOptions(s, { destA }));
+        check(allVerified(job), "a stale temp does not block the copy");
+        check(!itemExists(appendSeparator(destA) + Zstr("clip.mov.ffs_tmp")), "the stale temp at the root is cleaned up");
+        check(!itemExists(appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0001.JPG.ffs_tmp")), "the stale temp in a subfolder is cleaned up");
+        check(readText(appendSeparator(destA) + Zstr("clip.mov")) == pattern(250000), "the real file still lands at its final name");
+        check(countTempsIn(destA) == 0, "no .ffs_tmp files remain after the run");
+    }
+    {
+        //a stale temp sitting on the source side is not a file to copy
+        Scratch s(Zstr("staletemps-src"));
+        s.buildSource();
+        writeText(appendSeparator(s.source) + Zstr("clip.mov.ffs_tmp"), "partial garbage");
+        const Zstring destB = s.dest("DEST_B");
+        createDirectoryIfMissingRecursion(destB);
+
+        const JobReport job = runJob(makeOptions(s, { destB }));
+        check(allVerified(job), "a source-side stale temp does not break the run");
+        check(job.dests[0].files.size() == 4, "the source-side temp is not enumerated (got " +
+              std::to_string(job.dests[0].files.size()) + ")");
+        check(!itemExists(appendSeparator(destB) + Zstr("clip.mov.ffs_tmp")), "the source-side temp is not copied");
+    }
+}
+
 
 int main()
 {
@@ -529,6 +635,9 @@ int main()
     testPauseAndCancel();
     testHashAlgorithmReported();
     testMeasureSource();
+    testScanFailure();
+    testTempPublish();
+    testStaleTemps();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
     if (failures > 0)
