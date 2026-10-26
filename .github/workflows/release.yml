@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: brew install llvm wxwidgets glib pkg-config openssl curl libssh2 libidn2
+
+      # Engine test suite (hashing, copy-and-verify, duplicate detect,
+      # corruption, name clash, reports, dry run, pause/cancel, fit check).
+      - name: Build engine and run tests
+        working-directory: FreeFileSync/Source
+        run: make -f Makefile.macos test
+
+      - name: Build engine archive for the app
+        working-directory: FreeFileSync/Source
+        run: make -f Makefile.macos liboffloadapi.a
+
+      # Bundles Offload.app self-contained and writes
+      # Offload-<version>-macos-arm64.zip + SHA256SUMS.txt (the updater
+      # checks the zip against the sums file). The version comes from
+      # Info.plist.
+      - name: Build release zip
+        working-directory: FreeFileSync/Source/offload/mac
+        run: make zip
+
+      # The notes for the pushed tag are its CHANGELOG section, from its
+      # "## <version>" heading to the next "## " heading.
+      - name: Extract release notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          awk -v ver="$VER" 'index($0, "## " ver) == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            printf '%s\n' "Offload $TAG" > notes.md
+          fi
+          cat notes.md
+
+      # Idempotent: a re-run uploads the assets to the existing release
+      # instead of failing because the release already exists.
+      - name: Create GitHub release
+        working-directory: FreeFileSync/Source/offload/mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" --clobber Offload-*.zip SHA256SUMS.txt
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$GITHUB_WORKSPACE/notes.md" Offload-*.zip SHA256SUMS.txt
+          fi

@@ -8,7 +8,7 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-10-25
 
 **Check for Updates, and an update that actually replaces the app.**
 
