@@ -15,13 +15,14 @@
 
 ## Download
 
-`Offload-0.10.0-macos-arm64.zip` — 8.3 MB, 22.8 MB unzipped. The app carries its own libraries,
+`Offload-0.10.1-macos-arm64.zip` — 8.3 MB, 22.8 MB unzipped. The app carries its own libraries,
 so the machine that runs it needs no Homebrew, wxWidgets or Xcode.
 
 ```bash
-curl -LO https://github.com/Salcedoandrew/freefilesync-offload/releases/download/v0.10.0/Offload-0.10.0-macos-arm64.zip
-shasum -a 256 Offload-0.10.0-macos-arm64.zip     # ee31c24f0ee14fb7e2550830d5646cc4c279f1a8eaa55706d73c628d4bff223c
-ditto -x -k Offload-0.10.0-macos-arm64.zip .
+curl -LO https://github.com/Salcedoandrew/freefilesync-offload/releases/download/v0.10.1/Offload-0.10.1-macos-arm64.zip
+curl -LO https://github.com/Salcedoandrew/freefilesync-offload/releases/download/v0.10.1/SHA256SUMS.txt
+shasum -a 256 -c SHA256SUMS.txt    # the updater verifies the same file before it replaces the app
+ditto -x -k Offload-0.10.1-macos-arm64.zip .
 open Offload.app
 ```
 
