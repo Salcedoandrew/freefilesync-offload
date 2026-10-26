@@ -12,6 +12,18 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.8.1 — 2026-10-26
+
+**Documentation only: no engine or window code changed in this release.**
+
+### Fixed
+- **The release table was four versions behind.** It stopped at v0.4.0, so 0.5.0 through
+  0.8.0 were missing from the one place the README lists the releases; each row now links
+  its own tag.
+- **Two dates disagreed** between that table and this file. Both now date a release by the
+  local day it went out, and say so, because GitHub stamps releases in UTC and pushes an
+  evening release onto the following day.
+
 ## 0.8.0 — 2026-10-26
 
 **Add queues the copies, Transfer starts them, and the run ends with a receipt that says
