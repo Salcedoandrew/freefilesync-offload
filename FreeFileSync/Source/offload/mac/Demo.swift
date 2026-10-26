@@ -47,6 +47,24 @@ enum Demo
         return model
     }
 
+    ///The confirmation window's sample run: the reference card copied to three
+    ///drives, at rates the measurements behind the README support.
+    static var summary: RunSummary
+    {
+        RunSummary(records:
+        [
+            TransferRecord(source: "Untitled", destination: "Production X · Day 6",
+                           files: 1_284, bytes: 92_800_000_000, seconds: 74, failed: 0,
+                           reportPath: "Offload Reports/2026-10-26 09.12.40 Untitled to Production X/report.csv"),
+            TransferRecord(source: "Untitled", destination: "Backup · Day 6",
+                           files: 1_284, bytes: 92_800_000_000, seconds: 96, failed: 0,
+                           reportPath: "Offload Reports/2026-10-26 09.12.40 Untitled to Backup/report.csv"),
+            TransferRecord(source: "Untitled", destination: "Backup 02 · Day 6",
+                           files: 1_284, bytes: 92_800_000_000, seconds: 118, failed: 0,
+                           reportPath: "Offload Reports/2026-10-26 09.12.40 Untitled to Backup 02/report.csv"),
+        ])
+    }
+
     ///Demo devices are not mounted anywhere; say so instead of asking the disk.
     private static func preview(_ device: Device) -> Device
     {

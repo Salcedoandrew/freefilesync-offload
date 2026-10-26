@@ -3,6 +3,7 @@
 // *                                                                           *
 // *   offload                          the app                                 *
 // *   offload --render out.png         render the window offscreen (screenshots)*
+// *   offload --render summary         render a finished run's confirmation    *
 // *   offload --self-test SRC DST...   drive the engine through the same Swift *
 // *                                    bridge the window uses, no GUI          *
 // *****************************************************************************
@@ -14,11 +15,23 @@ import SwiftUI
 
 @MainActor
 func renderWindow(to path: String, empty: Bool = false, tooSmall: Bool = false,
+                  summary: Bool = false,
                   width: CGFloat = 900, height: CGFloat = 566) -> Int32
 {
-    let model = empty ? AppModel(startClock: false) : Demo.model(tooSmall: tooSmall)
-    let view = RootView(model: model)
-        .frame(width: width, height: height)
+    //One offscreen render per window: the main one, or the confirmation a finished
+    //run leaves behind. The sheet is sized by its own content, so it needs no frame.
+    let content: AnyView
+    if summary
+    {
+        content = AnyView(RunSummaryView(summary: Demo.summary) {})
+    }
+    else
+    {
+        let model = empty ? AppModel(startClock: false) : Demo.model(tooSmall: tooSmall)
+        content = AnyView(RootView(model: model).frame(width: width, height: height))
+    }
+
+    let view = content
         .environment(\.colorScheme, .dark)
         .environment(\.snapshotRendering, true)
 
@@ -449,10 +462,21 @@ struct OffloadMain
 
         if let i = args.firstIndex(of: "--render")
         {
-            let out = i + 1 < args.count ? args[i + 1] : "offload-window.png"
+            //`--render summary` (or `--render out.png --summary`) captures the
+            //confirmation window instead of the main one.
+            var wantsSummary = args.contains("--summary")
+            var out = i + 1 < args.count ? args[i + 1] : "offload-window.png"
+            //`--render --summary` puts the flag where the path goes
+            if out.hasPrefix("--") { out = "offload-window.png" }
+            if out == "summary"
+            {
+                wantsSummary = true
+                out = "offload-summary.png"
+            }
             exit(renderWindow(to: out,
                               empty: args.contains("--empty"),
-                              tooSmall: args.contains("--fit")))
+                              tooSmall: args.contains("--fit"),
+                              summary: wantsSummary))
         }
 
         if let i = args.firstIndex(of: "--self-test")

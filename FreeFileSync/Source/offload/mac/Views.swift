@@ -829,9 +829,7 @@ struct RunSummaryView: View
                     .font(Theme.rowSmall)
                     .foregroundColor(record.failed > 0 ? Theme.amber : Theme.textSecondary)
                     .monospacedDigit()
-                Text(record.reportPath.isEmpty
-                     ? ""
-                     : (record.reportPath as NSString).lastPathComponent)
+                Text(reportFolder(record))
                     .font(Theme.rowSmall)
                     .foregroundColor(Theme.textTertiary)
                     .lineLimit(1)
@@ -840,6 +838,14 @@ struct RunSummaryView: View
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 11)
+    }
+
+    ///The report's own folder: the run-stamped name. The file inside it is always
+    ///report.csv, so naming that would say nothing about which run it belongs to.
+    private func reportFolder(_ record: TransferRecord) -> String
+    {
+        guard !record.reportPath.isEmpty else { return "" }
+        return ((record.reportPath as NSString).deletingLastPathComponent as NSString).lastPathComponent
     }
 
     private func line(for record: TransferRecord) -> String
