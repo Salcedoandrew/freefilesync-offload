@@ -200,6 +200,7 @@ once, so throughput is bounded by the slowest destination, not by the source.
 
 | Version | Date | What changed |
 |---|---|---|
+| [v0.9.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.9.0) | 2026-10-26 | Clear Finished in the Transfers header; failed rows stay behind to be read |
 | [v0.8.1](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.8.1) | 2026-10-26 | Documentation only: the release table caught up, and the changelog and table dates now agree |
 | [v0.8.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.8.0) | 2026-10-26 | Add queues and Transfer starts; a receipt when a run ends; the download's note names its own version |
 | [v0.7.0](https://github.com/Salcedoandrew/freefilesync-offload/releases/tag/v0.7.0) | 2026-10-25 | A damaged photo fails the run; the updater refuses a release it cannot verify; per-row speeds and pause |

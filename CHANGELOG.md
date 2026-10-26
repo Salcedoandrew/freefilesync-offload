@@ -12,6 +12,23 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.9.0 — 2026-10-26
+
+**A finished run can be swept out of the window in one click.**
+
+### Added
+- **Clear Finished.** Completed rows used to sit in the Transfers list for the life of the
+  window, one cross each. A small Clear Finished button now appears in the Transfers
+  header once anything is over, and removes the rows that completed or were cancelled.
+  A failed row stays behind on purpose: its text is the only place that names which files
+  failed, so a button that quietly erased that after a bad card would be the wrong
+  default; the row's own cross still clears it.
+
+### Notes
+- The mouse test now covers the queue and the clear: a queued row has no job to pause, a
+  run started under the Pause switch comes up paused, and Clear Finished drops the
+  cancelled row while keeping the paused one.
+
 ## 0.8.1 — 2026-10-26
 
 **Documentation only: no engine or window code changed in this release.**

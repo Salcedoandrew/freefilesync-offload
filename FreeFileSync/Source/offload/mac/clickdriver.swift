@@ -198,6 +198,13 @@ check(loadState(statePath)?.flag(0, "engineCancelled") == true, "the row's cance
 
 //--- 4b. Clear Finished sweeps out the row that ended ------------------------
 //Two rows: row 0 cancelled, row 1 still paused. Only the finished one goes.
+//The row only becomes .cancelled once the engine reports the job over, so wait
+//for that: Clear Finished appears off the back of it, and a fixed settle time
+//would make this check a coin flip on a machine that winds the job down slower.
+_ = waitForState(statePath) { snap in
+    let phase = snap.text(0, "phase")
+    return phase == "cancelled" || phase == "failed" || phase == "done"
+}
 clickAnchor("clear-finished")
 let afterClear = loadState(statePath)?.transfers.count ?? -1
 check(afterClear == 1, "Clear Finished removed the cancelled row and kept the paused one (got \(afterClear))")
