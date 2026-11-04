@@ -177,6 +177,19 @@ extern "C" OffloadJob* offload_job_start(const char* source, const char* dest, c
         }
     }
 
+    //Refuse here, with a message the UI can show, rather than inside the
+    //worker: a destination that is the source or inside it would break the
+    //"source is never modified" promise (the engine writes the hash cache
+    //and MHL into every destination root).
+    if (const std::string refuse = offload::checkDestRootsOutsideSource(sourcePath, { destPath });
+        !refuse.empty())
+    {
+        auto* job = new OffloadJob;
+        job->errorText = refuse;
+        job->finished = true;
+        return job;
+    }
+
     auto* job = new OffloadJob;
     job->opts.sourceRoot   = sourcePath;
     job->opts.destRoots    = { destPath };

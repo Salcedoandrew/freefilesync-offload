@@ -95,6 +95,15 @@ struct Options
     std::atomic<bool>* pause = nullptr;
 };
 
+//Refuses destination roots that equal the source or lie inside it: copying a
+//card into itself (or into a folder on it) pollutes the source, and the next
+//run copies the MHL and hash cache as data. Paths are canonicalised first
+//(absolute, no trailing slash, symlinks resolved), so "/Volumes/CARD/",
+//"/Volumes/CARD/." and a symlinked alias to the card all refuse. Returns the
+//refusal message, or empty when every destination is safely outside the source.
+std::string checkDestRootsOutsideSource(const Zstring& sourceRoot,
+                                        const std::vector<Zstring>& destRoots);
+
 //Runs the whole job. Failures never escape as exceptions: they land in the report,
 //one FileRecord at a time.
 JobReport runJob(const Options& opts);

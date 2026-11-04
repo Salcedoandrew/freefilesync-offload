@@ -760,7 +760,63 @@ final class AppModel: ObservableObject
         !selectedSourceDevices.isEmpty &&
         !selectedDestinationDevices.isEmpty &&
         !isMeasuringSources &&
-        blockedDestinations.isEmpty
+        blockedDestinations.isEmpty &&
+        invalidDestinationPairs.isEmpty
+    }
+
+    ///The folder this destination would actually receive for this source,
+    ///matching addTransfer(). The engine writes into destination/subfolder,
+    ///never into the card — unless the folder *is* the card or inside it,
+    ///which is why the containment check below uses exactly this path.
+    func plannedDestPath(source: Device, destination: Device) -> String
+    {
+        let subfolder = expandedSubfolder(for: source)
+        return destination.path.hasSuffix("/")
+            ? destination.path + subfolder
+            : destination.path + "/" + subfolder
+    }
+
+    ///Canonical path for containment tests: `.`/`..` collapsed, symlinks
+    ///resolved, no trailing slash. Mirrors the engine's refusal (engine.h),
+    ///so the button never offers what the engine would reject.
+    static func canonicalPath(_ path: String) -> String
+    {
+        let url = URL(fileURLWithPath: path).standardized.resolvingSymlinksInPath()
+        var p = url.path
+        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+        return p
+    }
+
+    ///True when the planned destination folder is the source itself or inside
+    ///it. Copying a card into itself pollutes the source: the engine deletes
+    ///`*.ffs_tmp` and writes the hash cache and MHL into every destination
+    ///root, and the next run copies the MHL as data and nests the output.
+    static func destIsInsideSource(dest: String, source: String) -> Bool
+    {
+        let d = canonicalPath(dest)
+        let s = canonicalPath(source)
+        if d == s { return true }
+        if s == "/" { return d.hasPrefix("/") } //every absolute path is inside /
+        return d.hasPrefix(s + "/")
+    }
+
+    ///(Source, destination) pairs whose planned folder is the source itself or
+    ///inside it. The engine refuses these; the Add button must not queue them.
+    var invalidDestinationPairs: [(source: Device, destination: Device)]
+    {
+        var out: [(Device, Device)] = []
+        for source in selectedSourceDevices
+        {
+            for destination in selectedDestinationDevices
+            {
+                if Self.destIsInsideSource(dest: plannedDestPath(source: source, destination: destination),
+                                           source: source.path)
+                {
+                    out.append((source, destination))
+                }
+            }
+        }
+        return out
     }
 
     ///Short label for a destination tile, or nil when there is nothing to warn about.
@@ -777,6 +833,10 @@ final class AppModel: ObservableObject
     ///One line explaining a disabled Add button, or a neutral summary when it is live.
     var fitSummary: (text: String, isWarning: Bool)
     {
+        if let (_, destination) = invalidDestinationPairs.first
+        {
+            return ("Cannot use \(destination.name): destination must not be the source or inside it", true)
+        }
         if let (device, verdict) = blockedDestinations.first
         {
             let more = blockedDestinations.count > 1 ? " (+ \(blockedDestinations.count - 1) more)" : ""
@@ -812,9 +872,7 @@ final class AppModel: ObservableObject
                     .appendingPathComponent("\(stamp) \(source.name) to \(destination.name)", isDirectory: true)
 
                 //The engine writes into destination/subfolder, never into the card.
-                let destPath = destination.path.hasSuffix("/")
-                    ? destination.path + subfolder
-                    : destination.path + "/" + subfolder
+                let destPath = plannedDestPath(source: source, destination: destination)
 
                 //Queued, not started: Add plans the copy, Transfer performs it.
                 let transfer = Transfer(source: source, destination: destination,

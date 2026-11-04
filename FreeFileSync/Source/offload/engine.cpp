@@ -19,9 +19,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
+#include <cstdlib>
 #include <map>
 #include <mutex>
+#include <set>
+#include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 using namespace zen;
@@ -274,7 +279,81 @@ bool alreadyPresent(const std::map<Zstring, DestEntry>& destIndex, const SourceF
     return it != destIndex.end() && it->second.size == f.size && it->second.modTime == f.modTime;
 }
 
-Zstring incrementedName(const std::map<Zstring, DestEntry>& destIndex, const Zstring& relPath)
+//Canonical path for the dest-inside-source refusal: absolute, `.`/`..`
+//collapsed, no trailing slash, and symlinks resolved along the longest
+//existing prefix. A destination often does not exist yet, so realpath on the
+//whole path would fail; resolving the nearest existing ancestor still catches
+//the symlink tricks (a nonexistent leaf cannot be a symlink).
+std::string canonicalRoot(const Zstring& path)
+{
+    std::string s = zen::utfTo<std::string>(path);
+    if (s.empty())
+        return s;
+    if (s[0] != '/')
+    {
+        char cwd[PATH_MAX];
+        if (::getcwd(cwd, sizeof(cwd)) == nullptr)
+            return s;
+        s = std::string(cwd) + "/" + s;
+    }
+
+    std::vector<std::string> parts;
+    size_t i = 0;
+    while (i < s.size())
+    {
+        const size_t j = s.find('/', i);
+        const std::string comp = s.substr(i, j == std::string::npos ? j : j - i);
+        i = j == std::string::npos ? s.size() : j + 1;
+        if (comp.empty() || comp == ".")
+            continue;
+        if (comp == "..")
+        {
+            if (!parts.empty())
+                parts.pop_back();
+            continue;
+        }
+        parts.push_back(comp);
+    }
+    std::string norm = "/";
+    for (size_t k = 0; k < parts.size(); ++k)
+    {
+        if (k > 0)
+            norm += "/";
+        norm += parts[k];
+    }
+
+    char resolved[PATH_MAX];
+    std::string prefix = norm;
+    std::string suffix;
+    for (;;)
+    {
+        if (::realpath(prefix.c_str(), resolved) != nullptr)
+            return std::string(resolved) + suffix; //realpath strips the trailing slash
+        const size_t slash = prefix.rfind('/');
+        if (slash == std::string::npos || slash == 0)
+            break; //not even "/" resolves: keep the lexical result
+        suffix = prefix.substr(slash) + suffix;
+        prefix = prefix.substr(0, slash);
+    }
+    return norm;
+}
+
+bool destInsideSource(const std::string& dest, const std::string& src)
+{
+    if (dest == src)
+        return true;
+    if (src == "/")
+        return !dest.empty() && dest[0] == '/'; //every absolute path is inside /
+    return dest.size() > src.size() && dest.compare(0, src.size(), src) == 0 && dest[src.size()] == '/';
+}
+
+//`taken` holds the target names this run has already assigned: a generated
+//name must never collide with one either, or two source files land on the
+//same target. (A literal source file named `A-1.cr3` keeps its name while a
+//colliding `A.cr3` is renamed to `A-1.cr3`; without `taken` the second copy
+//fails loudly on the same path.)
+Zstring incrementedName(const std::map<Zstring, DestEntry>& destIndex,
+                        const std::set<Zstring>& taken, const Zstring& relPath)
 {
     //zen::Zstring has no substr(): do the surgery on std::string and convert back
     const std::string s = zen::utfTo<std::string>(relPath);
@@ -290,7 +369,7 @@ Zstring incrementedName(const std::map<Zstring, DestEntry>& destIndex, const Zst
     {
         const std::string candidate = dir + stem + "-" + std::to_string(n) + ext;
         const Zstring z(candidate.c_str());
-        if (destIndex.find(z) == destIndex.end())
+        if (destIndex.find(z) == destIndex.end() && taken.find(z) == taken.end())
             return z;
     }
     return relPath; //give up; the copy will fail loudly rather than overwrite silently
@@ -405,6 +484,11 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
                            ? plannedBytes * 2 : plannedBytes;
     sink.emit(true);
 
+    //Target names this run has already assigned. destIndex only knows what
+    //was on the destination at scan time, so without this a generated
+    //`A-1.cr3` could collide with a literal source file of the same name.
+    std::set<Zstring> takenNames;
+
     for (const SourceFile& f : source)
     {
         //every exit path from this loop body (there are seven) must count the file
@@ -516,8 +600,11 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         }
 
         //same name, different content or date: never overwrite, take the next free name
-        if (destIndex.find(dstRel) != destIndex.end())
-            dstRel = incrementedName(destIndex, dstRel);
+        //a name this run already assigned also counts as taken (a literal
+        //source file may share a generated name)
+        if (destIndex.find(dstRel) != destIndex.end() || takenNames.find(dstRel) != takenNames.end())
+            dstRel = incrementedName(destIndex, takenNames, dstRel);
+        takenNames.insert(dstRel);
 
         const Zstring dstPath = appendSeparator(dest.destRoot) + dstRel;
 
@@ -609,6 +696,20 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
 } //namespace
 
 
+std::string checkDestRootsOutsideSource(const Zstring& sourceRoot,
+                                        const std::vector<Zstring>& destRoots)
+{
+    const std::string src = canonicalRoot(sourceRoot);
+    for (const Zstring& d : destRoots)
+    {
+        const std::string dst = canonicalRoot(d);
+        if (destInsideSource(dst, src))
+            return "destination must not be the source or inside it: " + zen::utfTo<std::string>(d);
+    }
+    return {};
+}
+
+
 std::string getVerifyModeName(VerifyMode mode)
 {
     switch (mode)
@@ -661,6 +762,10 @@ void tally(DestReport& dest)
 
 bool allVerified(const JobReport& job)
 {
+    //A cancelled job is not a verified job, even when every record so far is
+    //clean: the invariant belongs here, not only at the call sites.
+    if (job.cancelled)
+        return false;
     //a source that could not be walked never verifies, even if a caller built the
     //report by hand
     if (!job.error.empty())
@@ -741,6 +846,18 @@ JobReport runJob(const Options& opts)
     job.startedAt   = std::time(nullptr);
     job.dryRun      = opts.dryRun;
     job.reverifyOnly = opts.reverifyOnly;
+
+    //Refuse before anything is touched: the engine deletes *.ffs_tmp and
+    //writes the hash cache and MHL into every destination root, so a
+    //destination that is the source or inside it would violate the "source is
+    //opened read-only and never written" promise, and the next run would copy
+    //the MHL as data and nest output folders.
+    if (const std::string refuse = checkDestRootsOutsideSource(opts.sourceRoot, opts.destRoots); !refuse.empty())
+    {
+        job.finishedAt = std::time(nullptr);
+        job.error = refuse;
+        return job;
+    }
 
     //One filter, parsed once, shared by the scan below and recorded in the report:
     //"what was skipped" belongs in the receipt, not only in the window.

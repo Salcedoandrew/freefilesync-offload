@@ -207,6 +207,15 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    //a destination that is the source or inside it is refused outright (exit 2):
+    //the engine writes cache/MHL files and deletes *.ffs_tmp in every
+    //destination root, so the "source is never modified" promise would break
+    if (const std::string refuse = checkDestRootsOutsideSource(args.source, args.dests); !refuse.empty())
+    {
+        std::cerr << "ffsoffload: " << refuse << "\n";
+        return 2;
+    }
+
     Options opts;
     opts.sourceRoot = args.source;
     opts.destRoots  = args.dests;
@@ -256,10 +265,8 @@ int main(int argc, char** argv)
         std::cout << "\n";
     }
 
-    size_t filesSeen = 0;
     opts.onFileDone = [&](const Zstring& destRoot, const FileRecord& f)
     {
-        ++filesSeen;
         if (args.quiet)
             return;
         std::cout << "  " << destLabel(destRoot) << "  " << getStateName(f.state)

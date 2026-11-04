@@ -161,6 +161,11 @@ std::string writeJson(const JobReport& job, const Zstring& filePath)
     out << "  \"cancelled\": " << (job.cancelled ? "true" : "false") << ",\n";
     out << "  \"dry_run\": " << (job.dryRun ? "true" : "false") << ",\n";
     out << "  \"reverify_only\": " << (job.reverifyOnly ? "true" : "false") << ",\n";
+    //A failed source scan runs no destination, so "destinations" is empty with
+    //no explanation: carry the job-level error here (the CLI --json stdout
+    //already prints it).
+    if (!job.error.empty())
+        out << "  \"error\": \"" << jsonEscape(job.error) << "\",\n";
     out << "  \"destinations\": [\n";
 
     for (size_t i = 0; i < job.dests.size(); ++i)
@@ -215,8 +220,16 @@ std::string writeMhl(const JobReport& job, const DestReport& dest, const Zstring
     out << "    <hashes>\n";
     for (const FileRecord& f : dest.files)
     {
-        if (f.hash.empty())
-            continue; //skipped files have no digest of ours; they are listed in the CSV/JSON log
+        //The MHL is the archival proof artifact: only a hash proven on the
+        //destination earns a line. A `mismatch` record carries a hash that is
+        //provably wrong (source and destination differed), a size-only copy
+        //was never read back at all, and a merely `copied` hash is the bytes
+        //that were written, not the bytes that are there. `alreadyPresent`
+        //counts only when the hash cache confirmed this exact file.
+        const bool proven = f.state == FileState::verified ||
+                            (f.state == FileState::alreadyPresent && f.hashConfirmed);
+        if (!proven || f.hash.empty())
+            continue; //unproven digests stay in the CSV/JSON log, never in the MHL
         out << "      <hash>\n";
         out << "        <file>" << xmlEscape(zen::utfTo<std::string>(f.relPath)) << "</file>\n";
         out << "        <size>" << f.size << "</size>\n";
