@@ -808,11 +808,13 @@ final class AppModel: ObservableObject
         for source in selectedSourceDevices
         {
             for destination in selectedDestinationDevices
+            {
                 if Self.destIsInsideSource(dest: plannedDestPath(source: source, destination: destination),
                                            source: source.path)
                 {
                     out.append((source, destination))
                 }
+            }
         }
         return out
     }
