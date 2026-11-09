@@ -12,6 +12,16 @@ nothing here is upstreamed (upstream is a read-only mirror).
 
 ---
 
+## 0.10.4 — 2026-11-08
+
+**Audit fixes: a destination can no longer be the source, and the MHL proof only covers files actually verified.**
+
+### Fixed
+- A destination equal to (or inside) the source is now refused, so an offload can no longer copy a folder into itself.
+- The MHL proof file only asserts hashes for files actually byte-verified; files that were not verified are no longer listed as proven.
+
+---
+
 ## 0.10.3 — 2026-10-26
 
 **The README now carries the upstream feature list, and About Offload has the email.**
