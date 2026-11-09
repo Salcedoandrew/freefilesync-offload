@@ -80,7 +80,7 @@ void FileBase::close() //throw FileError
 namespace
 {
     std::pair<FileBase::FileHandle, struct stat>
-openHandleForRead(const Zstring& filePath) //throw FileError, ErrorFileLocked
+openHandleForRead(const Zstring& filePath, bool uncached) //throw FileError, ErrorFileLocked
 {
     try
     {
@@ -111,6 +111,15 @@ openHandleForRead(const Zstring& filePath) //throw FileError, ErrorFileLocked
         const int fdFile = ::open(filePath.c_str(), O_RDONLY | O_CLOEXEC);
         if (fdFile == -1) //don't check "< 0" -> docu seems to allow "-2" to be a valid file handle
             THROW_LAST_SYS_ERROR("open");
+
+        if (uncached) //best effort: a filesystem that ignores this still reads correctly
+        {
+#if defined(__APPLE__)
+            ::fcntl(fdFile, F_NOCACHE, 1); //reads through this handle bypass the page cache
+#else
+            ::posix_fadvise(fdFile, 0 /*offset*/, 0 /*len*/, POSIX_FADV_DONTNEED); //drop the cached pages
+#endif
+        }
         return {fdFile /*pass ownership*/, fileInfo};
     }
     catch (const SysError& e) { throw FileError(replaceCpy(_("Cannot open file %x."), L"%x", fmtPath(filePath)), e.toString()); }
@@ -119,7 +128,11 @@ openHandleForRead(const Zstring& filePath) //throw FileError, ErrorFileLocked
 
 
 FileInputPlain::FileInputPlain(const Zstring& filePath) :
-    FileInputPlain(openHandleForRead(filePath), filePath) {} //throw FileError, ErrorFileLocked
+    FileInputPlain(openHandleForRead(filePath, false), filePath) {} //throw FileError, ErrorFileLocked
+
+
+FileInputPlain::FileInputPlain(const Zstring& filePath, bool uncached) :
+    FileInputPlain(openHandleForRead(filePath, uncached), filePath) {} //throw FileError, ErrorFileLocked
 
 
 FileInputPlain::FileInputPlain(const std::pair<FileBase::FileHandle, struct stat>& fileDetails, const Zstring& filePath) :

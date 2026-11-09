@@ -59,6 +59,10 @@ class FileInputPlain : public FileBase
 {
 public:
     FileInputPlain(                   const Zstring& filePath); //throw FileError, ErrorFileLocked
+    //uncached: keep this read out of the OS page cache (F_NOCACHE on macOS,
+    //POSIX_FADV_DONTNEED on Linux), so the bytes come from the device. A verify
+    //read must not be answered by the pages the copy just wrote.
+    FileInputPlain(                   const Zstring& filePath, bool uncached); //throw FileError, ErrorFileLocked
     FileInputPlain(FileHandle handle, const Zstring& filePath); //takes ownership!
 
     //may return short, only 0 means EOF! CONTRACT: bytesToRead > 0!
