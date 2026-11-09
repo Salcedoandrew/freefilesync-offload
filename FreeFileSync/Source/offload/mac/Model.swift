@@ -776,15 +776,47 @@ final class AppModel: ObservableObject
             : destination.path + "/" + subfolder
     }
 
-    ///Canonical path for containment tests: `.`/`..` collapsed, symlinks
-    ///resolved, no trailing slash. Mirrors the engine's refusal (engine.h),
-    ///so the button never offers what the engine would reject.
+    ///Canonical path for containment tests: symlinks resolved, `.`/`..` applied
+    ///to the *resolved* parent, no trailing slash. Mirrors the engine's refusal
+    ///(engine.cpp), so the button never offers what the engine would reject.
+    ///
+    ///The order matters. `URL.standardized` collapses `..` lexically first, so
+    ///`link/../card` becomes `card` even when `link` points at `card/sub`: the
+    ///text walks out of a directory the path never entered. Resolving as we walk
+    ///(and only then stepping up) is what makes a symlinked alias to the card,
+    ///or to a folder on it, refuse instead of quietly writing into the source.
     static func canonicalPath(_ path: String) -> String
     {
-        let url = URL(fileURLWithPath: path).standardized.resolvingSymlinksInPath()
-        var p = url.path
-        while p.count > 1 && p.hasSuffix("/") { p.removeLast() }
-        return p
+        func resolve(_ p: String) -> String?
+        {
+            guard let r = realpath(p, nil) else { return nil } //not there (yet): keep the literal path
+            defer { free(r) }
+            return String(cString: r)
+        }
+
+        var base = path
+        if !base.hasPrefix("/")
+        {
+            base = FileManager.default.currentDirectoryPath + "/" + base
+        }
+
+        var parts: [String] = []
+        for comp in base.split(separator: "/", omittingEmptySubsequences: true)
+        {
+            if comp == "." { continue }
+            if comp == ".."
+            {
+                if !parts.isEmpty { parts.removeLast() }
+                continue
+            }
+            parts.append(String(comp))
+            //the prefix is canonical at every step, so `..` below only has to pop
+            if let r = resolve("/" + parts.joined(separator: "/"))
+            {
+                parts = r.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            }
+        }
+        return "/" + parts.joined(separator: "/")
     }
 
     ///True when the planned destination folder is the source itself or inside

@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,20 +31,27 @@ using namespace offload;
 
 namespace
 {
-//Workers read these; the signal handler only sets the plain flag below, because
-//only `volatile sig_atomic_t` is safe to touch from a handler.
+//Workers read these; the signal handler only touches the plain flags below,
+//because `volatile sig_atomic_t` is the one thing a handler may assign (an
+//atomic's store is not async-signal-safe: it may take a lock, and a handler that
+//runs on the thread already holding it deadlocks the process).
 std::atomic<bool> g_pause{ false };
 std::atomic<bool> g_cancel{ false };
 std::atomic<bool> g_done{ false };
-volatile sig_atomic_t g_pauseSignal = 0;
+volatile sig_atomic_t g_pauseSignal  = 0;
+volatile sig_atomic_t g_cancelSignal = 0;
+
+//One lock for every line the workers and the pause monitor print: without it two
+//destinations finishing at the same time interleave their output mid-line.
+std::mutex g_printMutex;
 
 //SIGUSR1 toggles pause, SIGINT/SIGTERM cancel after the file in flight.
 extern "C" void onSignal(int sig)
 {
     if (sig == SIGUSR1)
-        g_pauseSignal = !g_pauseSignal;
+        g_pauseSignal = g_pauseSignal ? 0 : 1;
     else
-        g_cancel.store(true);
+        g_cancelSignal = 1;
 }
 
 void installSignalHandlers()
@@ -53,18 +61,27 @@ void installSignalHandlers()
     std::signal(SIGTERM, onSignal);
 }
 
-//Turns the signal-flag into the atomic the engine polls, once per 50 ms.
+//Turns the signal flags into the atomics the engine polls, once per 50 ms. This
+//runs on a normal thread, so a store here is safe; the handler never does one.
 std::thread startSignalBridge()
 {
     return std::thread([]()
     {
+        sig_atomic_t seenPause  = 0;
+        sig_atomic_t seenCancel = 0;
         while (!g_done.load())
         {
-            static sig_atomic_t seen = 0;
-            if (g_pauseSignal != seen)
+            const sig_atomic_t pause = g_pauseSignal;
+            if (pause != seenPause)
             {
-                seen = g_pauseSignal;
-                g_pause.store(seen != 0);
+                seenPause = pause;
+                g_pause.store(pause != 0);
+            }
+            const sig_atomic_t cancel = g_cancelSignal;
+            if (cancel != seenCancel)
+            {
+                seenCancel = cancel;
+                g_cancel.store(cancel != 0);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
@@ -243,6 +260,7 @@ int main(int argc, char** argv)
                 if (paused != announced)
                 {
                     announced = paused;
+                    const std::lock_guard<std::mutex> printLock(g_printMutex); //one line at a time
                     std::cout << (paused ? "\n-- paused (SIGUSR1 to resume) --\n"
                                          : "\n-- resumed --\n") << std::flush;
                 }
@@ -262,13 +280,18 @@ int main(int argc, char** argv)
         std::cout << "hash    " << getAlgoName(args.hash) << "\n";
         if (!args.exclude.empty())
             std::cout << "skip    " << ExcludeFilter::parse(args.exclude).text() << "\n";
-        std::cout << "\n";
+        //flush the banner: redirected output (a log file, a wrapper script) must
+        //show what is running before the first file completes, not at exit
+        std::cout << "\n" << std::flush;
     }
 
+    //called from every destination's worker thread at once: the lock is what keeps
+    //two lines from being spliced together
     opts.onFileDone = [&](const Zstring& destRoot, const FileRecord& f)
     {
         if (args.quiet)
             return;
+        const std::lock_guard<std::mutex> printLock(g_printMutex);
         std::cout << "  " << destLabel(destRoot) << "  " << getStateName(f.state)
                   << "  " << humanBytes(f.size) << "  " << zen::utfTo<std::string>(f.relPath);
         if (f.broken)
