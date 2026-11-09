@@ -22,12 +22,17 @@
 
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fcntl.h>
 #include <iostream>
 #include <string>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 using namespace offload;
@@ -1109,6 +1114,491 @@ void testExcludeFilter()
 }
 
 
+//-------------------------------------------------- already-present needs proof
+//P0-1: "same name + size + date" is a guess. Without a cache entry the engine must
+//hash both sides before it skips a file, and a skip nobody proved must never read
+//as verified.
+void testPresentProofNeedsHash()
+{
+    std::cout << "already-present proof\n";
+
+    //--- a clean destination, no cache: the skip is confirmed by hashing
+    {
+        Scratch s(Zstr("presentproof-clean"));
+        s.buildSource();
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+
+        const JobReport first = runJob(makeOptions(s, { destA }));
+        check(allVerified(first), "clean: the first run verifies");
+
+        //throw the proof away: now name+size+mtime is all the engine knows
+        const Zstring cachePath = appendSeparator(destA) + kCacheFileName;
+        check(itemExists(cachePath), "clean: the first run wrote a cache");
+        removeFilePlain(cachePath);
+
+        const JobReport second = runJob(makeOptions(s, { destA }));
+        check(allVerified(second), "clean: the run without a cache still verifies");
+        check(second.dests[0].skipped == 4, "clean: all four are skipped (got " +
+              std::to_string(second.dests[0].skipped) + ")");
+        check(second.dests[0].bytesCopied == 0, "clean: nothing is re-copied when the bytes match");
+        check(second.dests[0].cacheHits == 0, "clean: no cache hit was possible (got " +
+              std::to_string(second.dests[0].cacheHits) + ")");
+        check(second.dests[0].cacheMisses == 4, "clean: all four were hashed fresh (got " +
+              std::to_string(second.dests[0].cacheMisses) + ")");
+
+        bool allConfirmed = true;
+        for (const FileRecord& f : second.dests[0].files)
+            allConfirmed = allConfirmed && f.state == FileState::alreadyPresent &&
+                           f.hashConfirmed && !f.hash.empty();
+        check(allConfirmed, "clean: every skip is hash-confirmed with its digest");
+
+        //and the proof is remembered, so the next run needs no read at all
+        const std::string rebuilt = readText(cachePath);
+        check(rebuilt.rfind("ffsoffload-cache 1\n", 0) == 0, "clean: the cache is rebuilt");
+        check(rebuilt.find("clip.mov") != std::string::npos, "clean: the rebuilt cache lists the file");
+    }
+
+    //--- a destination whose bytes do not match, with size and date unmoved:
+    //exactly the state a size+mtime check cannot see
+    {
+        Scratch s(Zstr("presentproof-corrupt"));
+        s.buildSource();
+        const Zstring destA = s.dest("DEST_A");
+        createDirectoryIfMissingRecursion(destA);
+
+        check(allVerified(runJob(makeOptions(s, { destA }))), "corrupt: the first run verifies");
+
+        const Zstring victim = appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0002.JPG");
+        const auto stamp = std::filesystem::last_write_time(std::filesystem::path(zen::utfTo<std::string>(victim)));
+        const std::string corrupted = [&]
+        {
+            std::string bytes = readText(victim);
+            bytes[100] = static_cast<char>(bytes[100] ^ 0xFF);
+            writeText(victim, bytes);
+            return bytes;
+        }();
+        std::filesystem::last_write_time(std::filesystem::path(zen::utfTo<std::string>(victim)), stamp);
+
+        const Zstring cachePath = appendSeparator(destA) + kCacheFileName;
+        removeFilePlain(cachePath); //no stored proof for any file any more
+
+        const JobReport job = runJob(makeOptions(s, { destA }));
+        check(allVerified(job), "corrupt: the run still verifies (the damaged copy is kept aside, not trusted)");
+        check(job.dests[0].skipped == 3, "corrupt: the three good files are skipped (got " +
+              std::to_string(job.dests[0].skipped) + ")");
+        check(job.dests[0].filesWritten == 1, "corrupt: the file whose bytes differ is copied again");
+        check(itemExists(appendSeparator(destA) + Zstr("DCIM/100CANON/IMG_0002-1.JPG")),
+              "corrupt: the source bytes land under the next free name");
+        check(readText(victim) == corrupted, "corrupt: the pre-existing file is never overwritten");
+
+        bool skippedCorrupt = false;
+        for (const FileRecord& f : job.dests[0].files)
+            if (f.state == FileState::alreadyPresent &&
+                zen::utfTo<std::string>(f.relPath).find("IMG_0002.JPG") != std::string::npos &&
+                !f.hashConfirmed)
+                skippedCorrupt = true;
+        check(!skippedCorrupt, "corrupt: a skip without a proven hash is never reported");
+    }
+
+    //--- the invariant itself: an unconfirmed skip is not a success
+    {
+        JobReport job;
+        DestReport d;
+        d.destRoot = Zstr("/tmp/does-not-matter");
+        FileRecord rec;
+        rec.relPath = Zstr("clip.mov");
+        rec.state = FileState::alreadyPresent;
+        d.expectedFiles = 1;
+        d.files.push_back(rec);
+        tally(d);
+        job.dests.push_back(d);
+
+        check(!allVerified(job), "an already-present record with no confirmed hash does not verify");
+        job.dests[0].files[0].hashConfirmed = true;
+        check(allVerified(job), "the same record verifies once its bytes are proven");
+
+        //a copy that was never read back is unfinished in a read-back run, and
+        //honest by definition in a size-only one
+        job.dests[0].files[0].state = FileState::copied;
+        tally(job.dests[0]);
+        check(allVerified(job), "a size-only run may report a copy it never read back");
+        job.readBackVerify = true;
+        check(!allVerified(job), "a read-back run may not: a copied record is unverified");
+    }
+}
+
+//------------------------------------------------------ a symlink plus ".."
+//P0-2: `link/..` leaves the directory the link points at, not the one its text
+//names. Collapsing `..` lexically first turns a destination that really is the
+//card into something that looks innocent.
+void testSymlinkEscape()
+{
+    std::cout << "symlink escape refusal\n";
+    Scratch s(Zstr("symlink"));
+    s.buildSource();
+
+    const Zstring alias = appendSeparator(s.root) + Zstr("alias");
+    std::filesystem::create_directory_symlink(
+        std::filesystem::path(zen::utfTo<std::string>(appendSeparator(s.source) + Zstr("DCIM"))),
+        std::filesystem::path(zen::utfTo<std::string>(alias)));
+
+    //alias -> CARD/DCIM, so alias/.. is CARD itself, although the text says root
+    const Zstring escaped = alias + Zstr("/..");
+    check(!checkDestRootsOutsideSource(s.source, { escaped }).empty(),
+          "a symlink followed by .. is recognised as the source itself");
+    check(!checkDestRootsOutsideSource(s.source, { alias + Zstr("/newdir") }).empty(),
+          "a folder under a symlink into the card is refused, even though it does not exist yet");
+    check(checkDestRootsOutsideSource(s.source, { s.dest("DEST_A") }).empty(),
+          "an ordinary destination outside the card is still accepted");
+
+    //and the job refuses before it writes anything
+    const JobReport job = runJob(makeOptions(s, { escaped }));
+    check(!job.error.empty(), "the job refuses a destination that resolves to the source");
+    check(!allVerified(job), "the refused job does not claim success");
+    check(job.dests.empty(), "the refused job runs no destination");
+    check(!itemExists(appendSeparator(s.source) + kCacheFileName), "nothing is written into the card");
+    check(zen::getItemType(appendSeparator(s.source) + Zstr("DCIM")) == zen::ItemType::folder,
+          "the card is still intact");
+}
+
+//---------------------------------------------- a tree deeper than the walk limit
+//P1-1: dropping the files below the limit and reporting the rest as complete is
+//how the bottom of a card silently never gets copied.
+void testDeepNesting()
+{
+    std::cout << "deep nesting\n";
+    Scratch s(Zstr("deep"));
+    createDirectoryIfMissingRecursion(s.source);
+    writeText(appendSeparator(s.source) + Zstr("top.jpg"), validJpeg(2000));
+
+    std::string deep = zen::utfTo<std::string>(s.source);
+    for (int i = 0; i < 70; ++i) //past the 64-level walk limit
+        deep += "/d" + std::to_string(i);
+    createDirectoryIfMissingRecursion(Zstring(deep.c_str()));
+    writeText(Zstring(deep.c_str()) + Zstr("/deep.jpg"), validJpeg(2000));
+
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    const JobReport job = runJob(makeOptions(s, { destA }));
+    check(!job.error.empty(), "a tree deeper than the walk limit reports an error");
+    check(!allVerified(job), "a truncated walk does not verify");
+    check(job.dests.empty(), "a truncated walk runs no destination");
+    check(!itemExists(appendSeparator(destA) + Zstr("top.jpg")), "a truncated walk copies nothing at all");
+
+    uint64_t bytes = 0;
+    size_t   files = 0;
+    std::string err;
+    check(!measureSource(s.source, "", bytes, files, err), "the fit check refuses a tree it cannot walk");
+    check(!err.empty(), "the fit check says why");
+}
+
+//----------------------------------------------- numbers in the cache never wrap
+//P1-2: a wrapped size can match the wrong file, and the cache only exists to be
+//trusted. Overflow is a rejected line, not a silent value.
+void testCacheNumberOverflow()
+{
+    std::cout << "cache number overflow\n";
+    const Zstring cachePath = appendSeparator(getTempFolderPath()) + Zstr("ffsoffload-test-cache-overflow");
+    try { if (itemExists(cachePath)) removeFilePlain(cachePath); } catch (const FileError&) {}
+
+    writeText(cachePath,
+              "ffsoffload-cache 1\n"
+              "clip.mov\t18446744073709551616\t1700000001\txxh64\t0123456789abcdef\n" //2^64
+              "IMG_0001.JPG\t5000\t99999999999999999999\txxh64\tabcdef0123456789\n"  //mtime overflows
+              "good.jpg\t5000\t1700000000\txxh64\tabcdef0123456789\n");
+
+    HashCache c;
+    check(c.load(cachePath), "a cache with overflowing numbers still loads");
+    check(c.size() == 1, "only the well-formed entry survives (got " + std::to_string(c.size()) + ")");
+    check(!c.lookup(Zstr("clip.mov"), 0, 1700000001, HashAlgo::xxh64), "the overflowing size is not trusted");
+    check(!c.lookup(Zstr("IMG_0001.JPG"), 5000, 0, HashAlgo::xxh64), "the overflowing mtime is not trusted");
+    check(c.lookup(Zstr("good.jpg"), 5000, 1700000000, HashAlgo::xxh64).has_value(),
+          "the good line is still trusted");
+
+    //the largest value the type holds is valid: only overflow is an error
+    writeText(cachePath,
+              "ffsoffload-cache 1\n"
+              "huge.mov\t18446744073709551615\t1700000000\txxh64\t0123456789abcdef\n");
+    HashCache boundary;
+    check(boundary.load(cachePath), "the boundary cache loads");
+    check(boundary.lookup(Zstr("huge.mov"), UINT64_MAX, 1700000000, HashAlgo::xxh64).has_value(),
+          "UINT64_MAX itself is a valid size");
+    check(!boundary.lookup(Zstr("huge.mov"), 0, 1700000000, HashAlgo::xxh64),
+          "and it did not wrap around to zero");
+}
+
+//-------------------------------------------------------------- uncached verify
+//P1-3: a verification read answered from the page cache proves nothing. The read
+//path drops the cache and the digest it reports is the bytes the file holds.
+void testVerifyReadBypassesCache()
+{
+    std::cout << "uncached verify read\n";
+    Scratch s(Zstr("uncached"));
+    s.buildSource();
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+    check(allVerified(runJob(makeOptions(s, { destA }))), "the copy verifies");
+
+    //change one byte in place, straight to the same inode, after it was read and
+    //hashed once: only a real read of the file can see this
+    const Zstring victim = appendSeparator(destA) + Zstr("clip.mov");
+    std::string bytes = readText(victim);
+    bytes[200] = static_cast<char>(bytes[200] ^ 0x5A);
+    {
+        const int fd = ::open(zen::utfTo<std::string>(victim).c_str(), O_WRONLY);
+        check(fd >= 0, "the destination opens for an in-place edit");
+        if (fd >= 0)
+        {
+            check(::pwrite(fd, bytes.data() + 200, 1, 200) == 1, "one byte changes in place");
+            ::close(fd);
+        }
+    }
+
+    Options o = makeOptions(s, { destA });
+    o.reverifyOnly = true;
+    const JobReport job = runJob(o);
+    check(!allVerified(job), "re-verify catches the in-place change");
+    check(job.dests[0].mismatched == 1, "exactly one mismatch (got " +
+          std::to_string(job.dests[0].mismatched) + ")");
+
+    const std::string changedHash = hashOf(bytes);
+    bool sawChangedBytes = false;
+    for (const FileRecord& f : job.dests[0].files)
+        if (f.state == FileState::mismatch && f.error.find(changedHash) != std::string::npos)
+            sawChangedBytes = true;
+    check(sawChangedBytes, "the destination digest is the one the changed bytes have");
+
+    //and the uncached reader itself returns the file's bytes, not a stale copy
+    zen::FileInputPlain in(victim, /*uncached*/ true);
+    std::vector<char> buf(in.getBlockSize());
+    std::string readBack;
+    for (;;)
+    {
+        const size_t n = in.tryRead(buf.data(), buf.size());
+        if (n == 0)
+            break;
+        readBack.append(buf.data(), n);
+    }
+    check(readBack == bytes, "an uncached read returns what the file holds now");
+}
+
+//------------------------------------------------ mtime failure changes nothing
+//P2-1: a copy whose date could not be set is not the file that was promised. The
+//temp must be deleted, not renamed, and the file reported failed.
+void testMtimeFailureDeletesTemp()
+{
+    std::cout << "mtime failure\n";
+    Scratch s(Zstr("mtimefail"));
+    s.buildSource();
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    setForceMtimeFailureForTest(true);
+    const JobReport job = runJob(makeOptions(s, { destA }));
+    setForceMtimeFailureForTest(false);
+
+    check(!allVerified(job), "a copy whose date could not be set does not verify");
+    check(job.dests[0].failed == 4, "every file is reported failed (got " +
+          std::to_string(job.dests[0].failed) + ")");
+    check(job.dests[0].filesWritten == 0, "nothing is published");
+    check(!itemExists(appendSeparator(destA) + Zstr("clip.mov")), "no file lands at its final name");
+    check(countTempsIn(destA) == 0, "the temp is deleted, neither renamed nor left behind");
+    check(!itemExists(appendSeparator(destA) + kCacheFileName), "no cache entry is written for a failed copy");
+
+    bool explained = false;
+    for (const FileRecord& f : job.dests[0].files)
+        if (f.state == FileState::failed && f.error.find("modification time") != std::string::npos)
+            explained = true;
+    check(explained, "the failure says the modification time could not be set");
+
+    //and a later run copies the files normally
+    const JobReport retry = runJob(makeOptions(s, { destA }));
+    check(allVerified(retry), "a run without the fault verifies");
+    check(readText(appendSeparator(destA) + Zstr("clip.mov")) == pattern(250000), "the retry writes the right bytes");
+}
+
+//--------------------------------------------- another job's temp is not ours
+//P2-2: publish temps carry their owner's pid, so cleaning up after a dead run can
+//never delete a temp a concurrent run is writing into.
+void testForeignLiveTempPreserved()
+{
+    std::cout << "concurrent job temps\n";
+    Scratch s(Zstr("livetemp"));
+    s.buildSource();
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    //a helper that stays alive for the duration, standing in for another job
+    const pid_t live = ::fork();
+    if (live == 0)
+    {
+        ::sleep(30);
+        ::_exit(0);
+    }
+    check(live > 0, "a helper process owns the live temp");
+
+    //a helper that is already gone, standing in for a killed run
+    pid_t dead = ::fork();
+    if (dead == 0)
+        ::_exit(0);
+    if (dead > 0)
+    {
+        int status = 0;
+        ::waitpid(dead, &status, 0);
+    }
+
+    const std::string liveTemp = zen::utfTo<std::string>(destA) + "/clip.mov." +
+                                 std::to_string(live) + "-deadbeef.ffs_tmp";
+    const std::string deadTemp = zen::utfTo<std::string>(destA) + "/IMG_0001.JPG." +
+                                 std::to_string(dead) + "-cafe.ffs_tmp";
+    writeText(Zstring(liveTemp.c_str()), "in flight");
+    writeText(Zstring(deadTemp.c_str()), "abandoned");
+
+    const JobReport job = runJob(makeOptions(s, { destA }));
+    check(allVerified(job), "a foreign live temp does not disturb the run");
+    check(itemExists(Zstring(liveTemp.c_str())), "the live temp of a concurrent job is left alone");
+    check(!itemExists(Zstring(deadTemp.c_str())), "the temp of a dead job is cleaned up");
+    check(countTempsIn(destA) == 1, "only the live foreign temp remains (got " +
+          std::to_string(countTempsIn(destA)) + ")");
+    check(readText(appendSeparator(destA) + Zstr("clip.mov")) == pattern(250000),
+          "the copy still lands intact next to it");
+
+    if (live > 0)
+    {
+        ::kill(live, SIGKILL);
+        int status = 0;
+        ::waitpid(live, &status, 0);
+    }
+
+    //our own temps are unique per file and carry the owning pid
+    const Zstring t1 = makePublishTempPath(Zstr("/tmp/x"));
+    const Zstring t2 = makePublishTempPath(Zstr("/tmp/x"));
+    check(t1 != t2, "two publish temps for the same file differ");
+    check(zen::endsWith(t1, Zstr(".ffs_tmp")), "a publish temp still ends in .ffs_tmp");
+    check(zen::utfTo<std::string>(t1).find(std::to_string(::getpid())) != std::string::npos,
+          "the temp name carries the owning pid");
+}
+
+
+//------------------------------------------------------------ signal handling
+//P1-4: the handler may only touch `volatile sig_atomic_t`, so the CLI is driven as
+//a real process: pause it with SIGUSR1, cancel it with SIGINT, and require that
+//both reached the engine and that a cancelled run does not claim success.
+void testCliSignals()
+{
+    std::cout << "cli signals\n";
+    std::error_code ec;
+    if (!std::filesystem::exists(std::filesystem::path("./ffsoffload"), ec))
+    {
+        std::cout << "  (skipped: ./ffsoffload is not built)\n";
+        return;
+    }
+
+    //many small files, not one huge one: the run then lasts long enough to signal
+    //it deterministically without asking the test to hold a gigabyte in memory
+    Scratch s(Zstr("clisignals"));
+    createDirectoryIfMissingRecursion(s.source);
+    const std::string chunk = pattern(64 * 1024);
+    const int fileCount = 800;
+    for (int i = 0; i < fileCount; ++i)
+    {
+        char name[32];
+        std::snprintf(name, sizeof(name), "clip%04d.mov", i);
+        writeText(appendSeparator(s.source) + Zstring(name), chunk);
+    }
+    const Zstring destA = s.dest("DEST_A");
+    createDirectoryIfMissingRecursion(destA);
+
+    const Zstring logPath = appendSeparator(s.root) + Zstr("cli.log");
+    const int logFd = ::open(zen::utfTo<std::string>(logPath).c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    check(logFd >= 0, "the CLI log opens");
+
+    const pid_t pid = ::fork();
+    if (pid == 0)
+    {
+        if (logFd >= 0)
+        {
+            ::dup2(logFd, STDOUT_FILENO);
+            ::dup2(logFd, STDERR_FILENO);
+        }
+        ::execl("./ffsoffload", "ffsoffload",
+                "--source", zen::utfTo<std::string>(s.source).c_str(),
+                "--dest",   zen::utfTo<std::string>(destA).c_str(),
+                static_cast<const char*>(nullptr));
+        ::_exit(127);
+    }
+    if (logFd >= 0)
+        ::close(logFd);
+    check(pid > 0, "the CLI starts");
+    if (pid <= 0)
+        return;
+
+    const auto waitForText = [&](const std::string& needle, int ms)
+    {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < until)
+        {
+            try
+            {
+                if (readText(logPath).find(needle) != std::string::npos)
+                    return true;
+            }
+            catch (const FileError&) {}
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    };
+
+    //the banner is printed after the handlers are installed, so this is the handshake
+    check(waitForText("verify", 10000), "the CLI starts up and installs its handlers");
+    ::kill(pid, SIGUSR1);
+    check(waitForText("paused", 10000), "SIGUSR1 pauses the run");
+
+    ::kill(pid, SIGINT); //cancel while parked in the pause
+    int status = 0;
+    bool reaped = false;
+    for (int i = 0; i < 1200 && !reaped; ++i)
+    {
+        if (::waitpid(pid, &status, WNOHANG) == pid)
+            reaped = true;
+        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!reaped)
+    {
+        ::kill(pid, SIGKILL);
+        ::waitpid(pid, &status, 0);
+    }
+    check(reaped, "the CLI exits after the cancel signal");
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 1, "a cancelled run exits 1");
+
+    const std::string log = readText(logPath);
+    check(log.find("paused") != std::string::npos, "the pause was reported to the user");
+    check(log.find("FAILED") != std::string::npos, "a cancelled run does not claim success");
+
+    //every published copy is complete, never a partial, and the card is untouched
+    size_t published = 0;
+    bool complete = true;
+    for (int i = 0; i < fileCount; ++i)
+    {
+        char name[32];
+        std::snprintf(name, sizeof(name), "clip%04d.mov", i);
+        const Zstring copy = appendSeparator(destA) + Zstring(name);
+        if (itemExists(copy))
+        {
+            ++published;
+            complete = complete && readText(copy) == chunk;
+        }
+    }
+    check(complete, "every published copy is complete, never a partial file");
+    check(published < static_cast<size_t>(fileCount), "the cancel really stopped the run early (" +
+          std::to_string(published) + " of " + std::to_string(fileCount) + " published)");
+    check(readText(appendSeparator(s.source) + Zstr("clip0000.mov")) == chunk, "the card is untouched");
+}
+
+
 int main()
 {
     std::cout << "ffsoffload tests\n\n";
@@ -1132,6 +1622,14 @@ int main()
     testHashCache();
     testTruncatedReport();
     testExcludeFilter();
+    testPresentProofNeedsHash();
+    testSymlinkEscape();
+    testDeepNesting();
+    testCacheNumberOverflow();
+    testVerifyReadBypassesCache();
+    testMtimeFailureDeletesTemp();
+    testForeignLiveTempPreserved();
+    testCliSignals();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
     if (failures > 0)

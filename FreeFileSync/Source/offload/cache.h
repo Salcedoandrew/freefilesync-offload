@@ -44,6 +44,12 @@ namespace offload
 //.ffs_tmp publish temps, so it is never copied as data.
 extern const Zstring kCacheFileName;
 
+//Unique publish temp next to `finalPath`: "<finalPath>.<pid>-<random>.ffs_tmp".
+//Shared by the engine's file copies and the cache's own atomic write, so one
+//naming rule decides what is a temp. The pid lets a later run tell a temp left by
+//a dead job (safe to delete) from one a concurrent job is writing right now.
+Zstring makePublishTempPath(const Zstring& finalPath);
+
 class HashCache
 {
 public:

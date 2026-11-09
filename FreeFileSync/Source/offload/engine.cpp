@@ -11,6 +11,7 @@
 #include <zen/file_access.h>
 #include <zen/file_path.h>
 #include <zen/file_error.h>
+#include <zen/file_io.h>
 #include <zen/file_traverser.h>
 #include <zen/utf.h>
 
@@ -18,9 +19,12 @@
 #include "afs/abstract.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <climits>
+#include <csignal>
 #include <cstdlib>
+#include <fcntl.h>
 #include <map>
 #include <mutex>
 #include <set>
@@ -37,6 +41,11 @@ namespace offload
 namespace
 {
 const zen::IoCallback noProgress = [](int64_t) {};
+
+//Test seam for the "mtime could not be set" path: no filesystem we can use makes
+//utimensat fail on a file we just wrote, so the decision itself is what the test
+//exercises. Always false in production.
+std::atomic<bool> g_forceMtimeFailure{ false };
 
 //Park the calling worker for as long as the pause flag is raised. Cancellation
 //wins over pause so a stopped job never hangs here.
@@ -155,13 +164,24 @@ Zstring joinRel(const Zstring& dir, const Zstring& name)
 //the job's Skip patterns exclude. `filter` may be null, which is the default: the
 //destination index is always built unfiltered, so a file that is excluded from the
 //copy cannot change how the files that are not excluded are matched.
+//hard limit on how deep a tree this engine walks. It is not silently swallowed:
+//a tree deeper than this is reported through `depthError`, so the job fails
+//loudly instead of reporting a truncated file list as a complete copy.
+constexpr size_t maxScanDepth = 64;
+
 void scanTree(const Zstring& absDir, const Zstring& relDir,
               std::vector<SourceFile>& filesOut, std::map<Zstring, DestEntry>& mapOut,
               const std::atomic<bool>* cancel, const ExcludeFilter* filter = nullptr,
-              size_t depth = 0)
+              size_t depth = 0, std::string* depthError = nullptr)
 {
-    if (depth > 64) //guards against pathological nesting / symlink-free loops
+    if (depth > maxScanDepth) //guards against pathological nesting / symlink-free loops
+    {
+        if (depthError && depthError->empty())
+            *depthError = "folder nesting deeper than " + std::to_string(maxScanDepth) +
+                          " levels (the job would silently drop the files below it): " +
+                          zen::utfTo<std::string>(absDir);
         return;
+    }
 
     traverseFolder(absDir,
                    [&](const FileInfo& fi)
@@ -189,22 +209,26 @@ void scanTree(const Zstring& absDir, const Zstring& relDir,
         const Zstring childRel = joinRel(relDir, fo.itemName);
         if (filter && !filter->empty() && filter->matches(zen::utfTo<std::string>(childRel)))
             return;
-        scanTree(fo.fullPath, childRel, filesOut, mapOut, cancel, filter, depth + 1);
+        scanTree(fo.fullPath, childRel, filesOut, mapOut, cancel, filter, depth + 1, depthError);
     },
     [](const SymlinkInfo&) {}); //symlinks are not followed and not copied
 }
 
+//Hash a file with the OS page cache out of the way (F_NOCACHE on macOS,
+//POSIX_FADV_DONTNEED on Linux). A verification read must see what the drive
+//holds: if it is answered from the pages the copy just wrote, a dying cable or
+//a lying controller cannot be caught, and the whole check is theater.
 bool hashFile(const Zstring& path, Hasher& hasher, std::string& err, Sink* sink = nullptr)
 {
     try
     {
-        const auto in = AFS::getInputStream(fff::createItemPathNative(path)); //throw FileError
-        const size_t blockSize = in->getBlockSize();
+        zen::FileInputPlain in(path, /*uncached*/ true); //throw FileError
+        const size_t blockSize = in.getBlockSize();
         std::vector<char> buf(blockSize);
 
         for (;;)
         {
-            const size_t n = in->tryRead(buf.data(), blockSize, noProgress); //0 == EOF
+            const size_t n = in.tryRead(buf.data(), blockSize); //0 == EOF
             if (n == 0)
                 break;
             hasher.update(buf.data(), n);
@@ -215,6 +239,28 @@ bool hashFile(const Zstring& path, Hasher& hasher, std::string& err, Sink* sink 
     }
     catch (const FileError& e) { err = zen::utfTo<std::string>(e.toString()); return false; }
     catch (const std::exception& e) { err = e.what(); return false; }
+}
+
+//Flush a file or a folder to the device. Best effort by design: the copy itself
+//already succeeded, and an fsync a filesystem refuses is not a data error.
+void fsyncPath(const Zstring& path)
+{
+    const int fd = ::open(zen::utfTo<std::string>(path).c_str(), O_RDONLY | O_CLOEXEC); //folders open fine too
+    if (fd < 0)
+        return;
+    ::fsync(fd);
+    ::close(fd);
+}
+
+Zstring parentPathOf(const Zstring& path)
+{
+    const std::string s = zen::utfTo<std::string>(path);
+    const size_t slash = s.rfind('/');
+    if (slash == std::string::npos)
+        return Zstring();
+    if (slash == 0)
+        return Zstr("/");
+    return Zstring(s.substr(0, slash).c_str());
 }
 
 //copy while hashing; the hash covers exactly the bytes written
@@ -230,7 +276,7 @@ bool copyAndHash(const Zstring& srcPath, const Zstring& dstPath,
         //kill or power cut mid-copy leaves a .ffs_tmp behind, never a partial
         //at the final name. The temp is unlinked by ~FileOutputPlain if the
         //copy throws; the rename below is atomic on one filesystem.
-        const Zstring tmpPath = dstPath + Zstr(".ffs_tmp");
+        const Zstring tmpPath = makePublishTempPath(dstPath);
         const auto out = AFS::getOutputStream(fff::createItemPathNative(tmpPath),
                                               size, modTime); //throw FileError
         const size_t blockSize = in->getBlockSize();
@@ -251,7 +297,27 @@ bool copyAndHash(const Zstring& srcPath, const Zstring& dstPath,
                 written += out->tryWrite(buf.data() + written, n - written, noProgress);
             sink.addBytes(n);
         }
-        out->finalize(noProgress); //throw FileError
+        const AFS::FinalizeResult fin = out->finalize(noProgress); //throw FileError
+
+        //The bytes must be on the drive before anything is published under the
+        //real name: the rename is what the hash cache and the report point at, and
+        //a power cut must not leave a verified-looking name over unwritten data.
+        fsyncPath(tmpPath);
+
+        //A copy whose modification time could not be set is not the file we
+        //promised to deliver (the next run would see a different date and copy it
+        //again, or worse, keep a date nothing vouches for). Delete the temp and
+        //fail this file instead of publishing it.
+        if (g_forceMtimeFailure.load() || fin.errorModTime)
+        {
+            try { removeFilePlain(tmpPath); } catch (const FileError&) {} //no orphan temp
+            err = "cannot set the modification time on the copy" +
+                  std::string(g_forceMtimeFailure.load() || !fin.errorModTime
+                              ? std::string()
+                              : ": " + zen::utfTo<std::string>(fin.errorModTime->toString()));
+            return false;
+        }
+
         try
         {
             //no overwrite: the final name was checked against the destination
@@ -263,6 +329,8 @@ bool copyAndHash(const Zstring& srcPath, const Zstring& dstPath,
             try { removeFilePlain(tmpPath); } catch (const FileError&) {} //no orphan temp
             throw;
         }
+        //and the rename itself must survive a crash, not only the file contents
+        fsyncPath(parentPathOf(dstPath));
         hashOut = hasher.hex();
         return true;
     }
@@ -270,20 +338,36 @@ bool copyAndHash(const Zstring& srcPath, const Zstring& dstPath,
     catch (const std::exception& e) { err = e.what(); return false; }
 }
 
-//Duplicate Detect, as Offshoot documents it: same name + size + mod time means
-//"the same file", so skip it. A same-name file that differs gets an incremented
-//name instead of being overwritten.
+//Duplicate Detect, as Offshoot documents it: same name + size + mod time is a
+//candidate for "the same file". It is only a candidate, though: the caller still
+//has to prove the bytes (cache entry, or a fresh hash of both sides) before
+//skipping, and a same-name file that differs gets an incremented name instead of
+//being overwritten.
 bool alreadyPresent(const std::map<Zstring, DestEntry>& destIndex, const SourceFile& f)
 {
     const auto it = destIndex.find(f.relPath);
     return it != destIndex.end() && it->second.size == f.size && it->second.modTime == f.modTime;
 }
 
-//Canonical path for the dest-inside-source refusal: absolute, `.`/`..`
-//collapsed, no trailing slash, and symlinks resolved along the longest
-//existing prefix. A destination often does not exist yet, so realpath on the
-//whole path would fail; resolving the nearest existing ancestor still catches
-//the symlink tricks (a nonexistent leaf cannot be a symlink).
+//Canonical path for the dest-inside-source refusal: absolute, symlinks resolved,
+//`.`/`..` applied to the *resolved* parent, no trailing slash.
+//
+//Order matters: `link/../card` must resolve `link` first and then step out of the
+//directory it points at. Collapsing `..` lexically first (the obvious encoding)
+//turns a destination that is really the card into something that looks innocent,
+//which is exactly the escape this check exists to stop. A destination often does
+//not exist yet, so only the existing prefix is resolved: a nonexistent leaf
+//cannot be a symlink, and realpath() on the whole path would just fail.
+std::string resolveExisting(const std::string& path)
+{
+    char* resolved = ::realpath(path.c_str(), nullptr); //allocates; std::free()s below
+    if (!resolved)
+        return path;
+    std::string out = resolved;
+    ::free(resolved);
+    return out;
+}
+
 std::string canonicalRoot(const Zstring& path)
 {
     std::string s = zen::utfTo<std::string>(path);
@@ -297,7 +381,9 @@ std::string canonicalRoot(const Zstring& path)
         s = std::string(cwd) + "/" + s;
     }
 
-    std::vector<std::string> parts;
+    //walking left to right keeps `cur` fully resolved at every step, so `..` only
+    //ever needs to drop its last component
+    std::string cur = "/";
     size_t i = 0;
     while (i < s.size())
     {
@@ -308,34 +394,16 @@ std::string canonicalRoot(const Zstring& path)
             continue;
         if (comp == "..")
         {
-            if (!parts.empty())
-                parts.pop_back();
+            if (cur != "/")
+            {
+                const size_t slash = cur.rfind('/');
+                cur = (slash == 0 || slash == std::string::npos) ? "/" : cur.substr(0, slash);
+            }
             continue;
         }
-        parts.push_back(comp);
+        cur = resolveExisting(cur == "/" ? "/" + comp : cur + "/" + comp);
     }
-    std::string norm = "/";
-    for (size_t k = 0; k < parts.size(); ++k)
-    {
-        if (k > 0)
-            norm += "/";
-        norm += parts[k];
-    }
-
-    char resolved[PATH_MAX];
-    std::string prefix = norm;
-    std::string suffix;
-    for (;;)
-    {
-        if (::realpath(prefix.c_str(), resolved) != nullptr)
-            return std::string(resolved) + suffix; //realpath strips the trailing slash
-        const size_t slash = prefix.rfind('/');
-        if (slash == std::string::npos || slash == 0)
-            break; //not even "/" resolves: keep the lexical result
-        suffix = prefix.substr(slash) + suffix;
-        prefix = prefix.substr(0, slash);
-    }
-    return norm;
+    return cur;
 }
 
 bool destInsideSource(const std::string& dest, const std::string& src)
@@ -397,10 +465,61 @@ void recordFailure(DestReport& dest, const SourceFile& f, FileState state, const
     dest.files.push_back(std::move(rec));
 }
 
-//Delete publish temps left by a run that was killed mid-copy. Without this the
-//next run's temp for the same file would collide (O_EXCL) and fail, and the
-//orphan would linger forever. Best-effort: a temp we cannot delete fails
-//loudly when its file is copied instead of failing the whole job here.
+//Delete publish temps left by a run that was killed mid-copy, and only those: a
+//temp whose owning process is still alive belongs to a job that is writing right
+//now, and deleting it would corrupt that copy (and collide with its O_EXCL open).
+//Best-effort: a temp we cannot delete fails loudly when its file is copied
+//instead of failing the whole job here.
+//
+//The name carries the owner's pid and a random tag (makePublishTempPath), so the
+//owner can be read back. A name without that shape is a temp from an older build:
+//nobody can still be writing it, so it is stale by definition.
+pid_t tempOwnerPid(const Zstring& itemName)
+{
+    const std::string name = zen::utfTo<std::string>(itemName);
+    const std::string suffix = ".ffs_tmp";
+    if (name.size() <= suffix.size() ||
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+        return 0;
+    const std::string stem = name.substr(0, name.size() - suffix.size());
+    const size_t dot = stem.rfind('.');
+    if (dot == std::string::npos)
+        return 0;
+    const std::string tag = stem.substr(dot + 1); //"<pid>-<random>"
+    const size_t dash = tag.find('-');
+    if (dash == std::string::npos || dash == 0)
+        return 0;
+    long long pid = 0;
+    for (size_t i = 0; i < dash; ++i)
+    {
+        if (tag[i] < '0' || tag[i] > '9')
+            return 0;
+        pid = pid * 10 + (tag[i] - '0');
+        if (pid > 99999999)
+            return 0;
+    }
+    return static_cast<pid_t>(pid);
+}
+
+bool processIsAlive(pid_t pid)
+{
+    if (pid <= 0)
+        return false;
+    if (::kill(pid, 0) == 0)
+        return true;
+    return errno != ESRCH; //EPERM: the process exists, we just may not signal it
+}
+
+bool isStaleTemp(const Zstring& itemName)
+{
+    const pid_t pid = tempOwnerPid(itemName);
+    if (pid <= 0)
+        return true;  //unknown owner: a temp from a build that used a plain name
+    if (pid == ::getpid())
+        return true;  //ours, from a run that is not this one: no copy is in flight yet
+    return !processIsAlive(pid);
+}
+
 void removeStaleTempsIn(const Zstring& absDir, size_t depth = 0)
 {
     if (depth > 64)
@@ -408,7 +527,7 @@ void removeStaleTempsIn(const Zstring& absDir, size_t depth = 0)
     traverseFolder(absDir,
                    [](const FileInfo& fi)
     {
-        if (isTempFileName(fi.itemName))
+        if (isTempFileName(fi.itemName) && isStaleTemp(fi.itemName))
             try { removeFilePlain(fi.fullPath); } catch (const FileError&) {}
     },
     [&](const FolderInfo& fo)
@@ -454,8 +573,10 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
     cache.load(appendSeparator(dest.destRoot) + kCacheFileName);
 
     //Plan the work before touching anything, so the progress bar has an honest
-    //denominator: files Duplicate Detect will skip contribute no bytes.
-    uint64_t plannedBytes = 0;
+    //denominator: files Duplicate Detect will skip contribute no copy bytes, but a
+    //skip it cannot confirm costs the hash of both sides.
+    uint64_t plannedBytes = 0; //copy (and read-back verification) work
+    uint64_t probeBytes   = 0; //hashing already-present files on a cache miss
     if (opts.reverifyOnly)
     {
         for (const SourceFile& f : source)
@@ -469,8 +590,12 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
     else if (!opts.dryRun)
     {
         for (const SourceFile& f : source)
-            if (!alreadyPresent(destIndex, f))
+        {
+            if (alreadyPresent(destIndex, f))
+                probeBytes += 2 * f.size; //source + destination, if the cache misses
+            else
                 plannedBytes += f.size;
+        }
     }
 
     Sink sink;
@@ -480,8 +605,8 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
     sink.prog.phase      = opts.reverifyOnly ? Progress::Phase::verifying : Progress::Phase::copying;
     //with read-back verification every byte is touched twice, so the bar needs
     //twice the bytes to fill; the phase tells the UI which pass is running
-    sink.prog.bytesTotal = opts.verify == VerifyMode::sourceAndDest && !opts.reverifyOnly && !opts.dryRun
-                           ? plannedBytes * 2 : plannedBytes;
+    sink.prog.bytesTotal = (opts.verify == VerifyMode::sourceAndDest && !opts.reverifyOnly && !opts.dryRun
+                            ? plannedBytes * 2 : plannedBytes) + probeBytes;
     sink.emit(true);
 
     //Target names this run has already assigned. destIndex only knows what
@@ -583,20 +708,70 @@ void runDestination(const Options& opts, const std::vector<SourceFile>& source,
         {
             FileRecord rec = baseRecord(f);
             rec.state = FileState::alreadyPresent;
+            const DestEntry& de = destIndex[f.relPath];
+
             //a cache hit turns "same name+size+mtime" into "hash-confirmed":
             //the entry was stored when this exact file was verified here
-            const DestEntry& de = destIndex[f.relPath];
             if (const auto hit = cache.lookup(f.relPath, de.size, de.modTime, opts.hashAlgo))
             {
                 rec.hash = *hit;
                 rec.hashConfirmed = true;
                 ++dest.cacheHits;
+                dest.files.push_back(std::move(rec));
+                if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
+                continue;
             }
-            else
-                ++dest.cacheMisses;
-            dest.files.push_back(std::move(rec));
-            if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
-            continue;
+
+            //Cache miss: name+size+mtime is a guess, not a proof, so hash both
+            //sides before skipping. A file that differs gets the name-clash
+            //treatment below: never overwrite, never pretend it is the source.
+            //(A dry run reads nothing; it reports the skip as unconfirmed.)
+            ++dest.cacheMisses;
+            bool confirmed = false;
+            std::string probeErr;
+            if (!opts.dryRun)
+            {
+                const Zstring presentPath = appendSeparator(dest.destRoot) + f.relPath;
+                Hasher srcHasher(opts.hashAlgo);
+                Hasher dstHasher(opts.hashAlgo);
+                std::string srcErr, dstErr;
+
+                sink.setPhase(Progress::Phase::verifying);
+                const bool srcOk = hashFile(srcPath, srcHasher, srcErr, &sink);
+                const bool dstOk = srcOk && hashFile(presentPath, dstHasher, dstErr, &sink);
+                sink.setPhase(Progress::Phase::copying);
+
+                if (!srcOk)
+                    probeErr = "source: " + srcErr;
+                else if (!dstOk)
+                    probeErr = "destination: " + dstErr;
+                else if (srcHasher.hex() == dstHasher.hex())
+                {
+                    rec.hash = dstHasher.hex();
+                    rec.hashConfirmed = true;
+                    confirmed = true;
+                    //proven fresh on this destination: remember it, so the next run
+                    //needs no read to skip this file
+                    cache.store(f.relPath, de.size, de.modTime, opts.hashAlgo, rec.hash);
+                }
+            }
+
+            if (confirmed || opts.dryRun)
+            {
+                dest.files.push_back(std::move(rec));
+                if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
+                continue;
+            }
+            if (!probeErr.empty()) //cannot prove either side: say so, do not guess
+            {
+                rec.state = FileState::failed;
+                rec.error = probeErr;
+                dest.files.push_back(std::move(rec));
+                if (opts.onFileDone) opts.onFileDone(dest.destRoot, dest.files.back());
+                continue;
+            }
+            //the bytes differ although name, size and date match: fall through and
+            //copy under the next free name instead of skipping a different file
         }
 
         //same name, different content or date: never overwrite, take the next free name
@@ -786,6 +961,33 @@ bool allVerified(const JobReport& job)
         //copy: the job cannot claim every file verified while one of them is broken.
         if (d.broken > 0)
             return false;
+
+        for (const FileRecord& f : d.files)
+        {
+            switch (f.state)
+            {
+                case FileState::verified:
+                    break;
+                case FileState::alreadyPresent:
+                    //"same name+size+mtime" is not proof of anything: only a skip
+                    //whose bytes were proven (cache entry, or a fresh pair of
+                    //hashes) may count. A dry run proves nothing by design, and it
+                    //copies nothing either, so its plan is not held to that bar.
+                    if (!f.hashConfirmed && !job.dryRun)
+                        return false;
+                    break;
+                case FileState::copied:
+                    //a copy that was never read back is not verified. Only a run
+                    //that does not claim byte verification may report one (size-only
+                    //mode, a dry run), and it says so through readBackVerify.
+                    if (job.readBackVerify)
+                        return false;
+                    break;
+                case FileState::mismatch:
+                case FileState::failed:
+                    return false;
+            }
+        }
     }
     return true;
 }
@@ -819,13 +1021,19 @@ bool measureSource(const Zstring& sourceRoot, const std::string& excludeText,
 
     std::vector<SourceFile> files;
     std::map<Zstring, DestEntry> ignored;
+    std::string depthErr;
     try
     {
-        scanTree(appendSeparator(sourceRoot), Zstring(), files, ignored, nullptr, &filter);
+        scanTree(appendSeparator(sourceRoot), Zstring(), files, ignored, nullptr, &filter, 0, &depthErr);
     }
     catch (const FileError& e)
     {
         err = zen::utfTo<std::string>(e.toString());
+        return false;
+    }
+    if (!depthErr.empty()) //the walk was truncated: what it measured is not the whole card
+    {
+        err = depthErr;
         return false;
     }
 
@@ -833,6 +1041,13 @@ bool measureSource(const Zstring& sourceRoot, const std::string& excludeText,
         bytesOut += f.size;
     filesOut = files.size();
     return true;
+}
+
+
+//The test binary flips this to exercise the "mtime could not be set" path.
+void setForceMtimeFailureForTest(bool on)
+{
+    g_forceMtimeFailure.store(on);
 }
 
 
@@ -846,6 +1061,8 @@ JobReport runJob(const Options& opts)
     job.startedAt   = std::time(nullptr);
     job.dryRun      = opts.dryRun;
     job.reverifyOnly = opts.reverifyOnly;
+    //the run claims byte verification only when it actually reads every copy back
+    job.readBackVerify = opts.verify == VerifyMode::sourceAndDest && !opts.dryRun;
 
     //Refuse before anything is touched: the engine deletes *.ffs_tmp and
     //writes the hash cache and MHL into every destination root, so a
@@ -868,9 +1085,10 @@ JobReport runJob(const Options& opts)
     std::vector<SourceFile> source;
     {
         std::map<Zstring, DestEntry> ignored;
+        std::string depthErr;
         try
         {
-            scanTree(appendSeparator(opts.sourceRoot), Zstring(), source, ignored, opts.cancel, &filter);
+            scanTree(appendSeparator(opts.sourceRoot), Zstring(), source, ignored, opts.cancel, &filter, 0, &depthErr);
         }
         catch (const FileError& e)
         {
@@ -884,6 +1102,15 @@ JobReport runJob(const Options& opts)
         {
             job.finishedAt = std::time(nullptr);
             job.error = e.what();
+            return job;
+        }
+        //A tree deeper than the walk limit is a failure, not a shorter file list:
+        //reporting the files above the cutoff as "everything" would lose the rest
+        //the moment the card is reused.
+        if (!depthErr.empty())
+        {
+            job.finishedAt = std::time(nullptr);
+            job.error = depthErr;
             return job;
         }
     }

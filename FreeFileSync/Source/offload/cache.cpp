@@ -9,7 +9,13 @@
 #include <zen/file_io.h>
 #include <zen/utf.h>
 
+#include <chrono>
+#include <climits>
+#include <cstdint>
+#include <mutex>
+#include <random>
 #include <sstream>
+#include <unistd.h>
 #include <vector>
 
 using namespace zen;
@@ -17,6 +23,29 @@ using namespace zen;
 namespace offload
 {
 const Zstring kCacheFileName = Zstr(".ffsoffload-cache");
+
+Zstring makePublishTempPath(const Zstring& finalPath)
+{
+    //random, not a counter: two jobs (or two threads of one job) must not pick
+    //the same temp name, and neither may pick a name an orphan already holds
+    static std::mt19937_64 rng{ []
+    {
+        std::random_device rd;
+        return (static_cast<uint64_t>(rd()) << 32) ^ rd() ^
+               (static_cast<uint64_t>(::getpid()) << 16) ^
+               static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    }() };
+    static std::mutex rngMutex;
+
+    uint64_t tag = 0;
+    {
+        const std::lock_guard<std::mutex> lock(rngMutex);
+        tag = rng();
+    }
+    std::ostringstream suffix;
+    suffix << '.' << static_cast<long long>(::getpid()) << '-' << std::hex << tag << ".ffs_tmp";
+    return finalPath + Zstring(suffix.str().c_str());
+}
 
 //File format, one entry per line:
 //    ffsoffload-cache 1
@@ -71,6 +100,9 @@ bool unescapePath(const std::string& s, std::string& out)
     return true;
 }
 
+//A number that does not fit the type is rejected, never wrapped: an overflowing
+//length would silently match (or miss) a real file, and the cache is only
+//trusted for entries it can prove.
 bool parseU64(const std::string& s, uint64_t& out)
 {
     if (s.empty())
@@ -80,7 +112,10 @@ bool parseU64(const std::string& s, uint64_t& out)
     {
         if (c < '0' || c > '9')
             return false;
-        v = v * 10 + static_cast<uint64_t>(c - '0');
+        const uint64_t digit = static_cast<uint64_t>(c - '0');
+        if (v > (UINT64_MAX - digit) / 10)
+            return false; //would wrap
+        v = v * 10 + digit;
     }
     out = v;
     return true;
@@ -104,9 +139,24 @@ bool parseI64(const std::string& s, int64_t& out)
     {
         if (s[i] < '0' || s[i] > '9')
             return false;
-        v = v * 10 + static_cast<uint64_t>(s[i] - '0');
+        const uint64_t digit = static_cast<uint64_t>(s[i] - '0');
+        if (v > (UINT64_MAX - digit) / 10)
+            return false; //would wrap
+        v = v * 10 + digit;
     }
-    out = negative ? -static_cast<int64_t>(v) : static_cast<int64_t>(v);
+    const uint64_t positiveMax = static_cast<uint64_t>(INT64_MAX);
+    if (negative)
+    {
+        if (v > positiveMax + 1) //-INT64_MIN would not fit either
+            return false;
+        out = v == positiveMax + 1 ? INT64_MIN : -static_cast<int64_t>(v);
+    }
+    else
+    {
+        if (v > positiveMax)
+            return false;
+        out = static_cast<int64_t>(v);
+    }
     return true;
 }
 } //namespace
@@ -214,7 +264,7 @@ std::string HashCache::save(const Zstring& filePath)
 
     //publish through a temp + rename, like a copied file: a crash mid-write
     //leaves the old cache intact instead of a half-written one
-    const Zstring tmpPath = filePath + Zstr(".ffs_tmp");
+    const Zstring tmpPath = makePublishTempPath(filePath);
     try
     {
         setFileContent(tmpPath, out.str(), [](int64_t) {}); //throw FileError

@@ -108,6 +108,11 @@ std::string checkDestRootsOutsideSource(const Zstring& sourceRoot,
 //one FileRecord at a time.
 JobReport runJob(const Options& opts);
 
+//Test seam for the "modification time could not be set" path: a copy whose date
+//cannot be set is deleted instead of published, and the file is reported failed.
+//Off in production; only the test binary turns it on.
+void setForceMtimeFailureForTest(bool on);
+
 //Total bytes and file count a transfer from this source would carry, counted with
 //exactly the same walk, junk rules and Skip patterns runJob uses. This is what the
 //window's fit check compares against free space, so "what will be copied" has one

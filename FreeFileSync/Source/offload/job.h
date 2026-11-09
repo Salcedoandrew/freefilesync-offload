@@ -89,6 +89,10 @@ struct JobReport
     time_t startedAt = 0;
     time_t finishedAt = 0;
     bool cancelled = false;
+    //This run read every copy back and compared hashes, so a record in state
+    //`copied` means the copy was never verified and the job cannot claim success.
+    //Size-only mode and dry runs leave it false because they never promise that.
+    bool readBackVerify = false;
     //Job-level failure: the source could not be walked, so no destination ran.
     //Empty when the scan succeeded; a job with an error here never verifies.
     std::string error;
